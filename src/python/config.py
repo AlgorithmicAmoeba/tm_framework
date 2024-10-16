@@ -15,6 +15,10 @@ class DatabaseConfig:
     password: str
     db_name: str
 
+    def get_engine_string(self):
+        res = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.db_name}"
+        return res
+
 
 def load_config(path: str) -> Config:
     with open(path, "r") as f:
