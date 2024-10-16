@@ -9,6 +9,8 @@ numpy = "*"
 pandas = "*"
 scipy = "*"
 psycopg2-binary = "*"
+sentence-transformers = "*"
+bertopic = "*"
 
 [dev-packages]
 pytest = "*"
