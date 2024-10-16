@@ -11,6 +11,7 @@ scipy = "*"
 psycopg2-binary = "*"
 sentence-transformers = "*"
 bertopic = "*"
+topmost = "*"
 
 [dev-packages]
 pytest = "*"
