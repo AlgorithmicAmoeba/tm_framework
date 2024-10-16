@@ -1,0 +1,41 @@
+#!/bin/bash
+if test "$#" -ne 3; then
+    echo "USAGE: HOST PORT USER"
+    echo "Password can either be specified as an environment variable '\$PASSWORD' or through stdin"
+    exit 1
+fi
+
+HOST="$1"
+PORT="$2"
+USER="$3"
+
+if [[ -z ${PASSWORD+x} ]]; then
+    read -p 'Password:' -s PASSWORD
+fi
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+STMT_DB="dbname=postgres host=$HOST port=$PORT user=$USER password=$PASSWORD"
+CONFIG="dbname=phd hostaddr=$HOST port=$PORT user=$USER password=$PASSWORD"
+
+# CREATE DBs
+psql "$STMT_DB" -c '\l' | grep 'phd' > /dev/null
+if [[ $? = 0 ]]; then
+    echo "NOTE: phd db already exists, not going to create db"
+else
+    psql "$STMT_DB" -c "CREATE DATABASE phd;"
+fi
+
+for file in ${DIR}/*.schema.*sql
+do
+  psql "$CONFIG" -f "$file"
+done
+
+# for file in ${DIR}/*.function.*sql
+# do
+#   psql "$CONFIG" -f "$file"
+# done
+
+
+
+psql "$CONFIG" -f ${DIR}/phd.user.sql

@@ -1,0 +1,17 @@
+CREATE USER phd WITH PASSWORD 'phd';
+
+GRANT ALL PRIVILEGES ON DATABASE phd TO phd;
+
+GRANT CREATE, USAGE ON SCHEMA public, topic_modelling TO phd;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON ALL TABLES IN SCHEMA public, topic_modelling
+TO phd;
+
+GRANT EXECUTE
+ON ALL FUNCTIONS IN SCHEMA public, topic_modelling
+TO phd;
+
+GRANT USAGE, SELECT
+ON ALL SEQUENCES IN SCHEMA public, topic_modelling
+TO phd;
