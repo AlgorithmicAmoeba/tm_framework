@@ -5,7 +5,6 @@ from sqlalchemy.sql import func
 
 Base = declarative_base()
 
-
 class Corpus(Base):
     __tablename__ = 'corpus'
     __table_args__ = {"schema": "topic_modelling"}
@@ -21,7 +20,6 @@ class Corpus(Base):
             f"id={self.id}, "
             f"name='{self.name}')>"
         )
-
 
 class DocumentType(Base):
     __tablename__ = 'document_type'
@@ -39,14 +37,12 @@ class DocumentType(Base):
             f"name='{self.name}')>"
         )
 
-
 class Document(Base):
     __tablename__ = 'document'
     __table_args__ = {"schema": "topic_modelling"}
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     corpus_id = Column(Integer, ForeignKey('topic_modelling.corpus.id'))
-    name = Column(String(255))
     content = Column(Text)
     language_code = Column(String(10))
     type_id = Column(Integer, ForeignKey('topic_modelling.document_type.id'))
@@ -59,10 +55,8 @@ class Document(Base):
         return (
             f"<Document("
             f"id={self.id}, "
-            f"name='{self.name}', "
             f"corpus_id={self.corpus_id})>"
         )
-
 
 class VocabularyWord(Base):
     __tablename__ = 'vocabulary_word'
@@ -70,7 +64,7 @@ class VocabularyWord(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     corpus_id = Column(Integer, ForeignKey('topic_modelling.corpus.id'))
-    word = Column(String(255), nullable=False)
+    word = Column(String(255), unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     
     corpus = relationship("Corpus")
@@ -82,7 +76,6 @@ class VocabularyWord(Base):
             f"word='{self.word}', "
             f"corpus_id={self.corpus_id})>"
         )
-
 
 class Embedder(Base):
     __tablename__ = 'embedder'
@@ -99,7 +92,6 @@ class Embedder(Base):
             f"id={self.id}, "
             f"name='{self.name}')>"
         )
-
 
 class Embedding(Base):
     __tablename__ = 'embedding'
@@ -122,27 +114,25 @@ class Embedding(Base):
             f"document_id={self.document_id})>"
         )
 
-
 class VocabularyWordEmbedding(Base):
     __tablename__ = 'vocabulary_word_embedding'
     __table_args__ = {"schema": "topic_modelling"}
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     vocabulary_word_id = Column(Integer, ForeignKey('topic_modelling.vocabulary_word.id'))
-    embedding_id = Column(Integer, ForeignKey('topic_modelling.embedding.id'))
+    embedder_id = Column(Integer, ForeignKey('topic_modelling.embedder.id'))
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     
     vocabulary_word = relationship("VocabularyWord")
-    embedding = relationship("Embedding")
+    embedder = relationship("Embedder")
 
     def __repr__(self):
         return (
             f"<VocabularyWordEmbedding("
             f"id={self.id}, "
             f"vocabulary_word_id={self.vocabulary_word_id}, "
-            f"embedding_id={self.embedding_id})>"
+            f"embedder_id={self.embedder_id})>"
         )
-
 
 class TopicModel(Base):
     __tablename__ = 'topic_model'
@@ -159,7 +149,6 @@ class TopicModel(Base):
             f"id={self.id}, "
             f"name='{self.name}')>"
         )
-
 
 class TopicModelCorpusResult(Base):
     __tablename__ = 'topic_model_corpus_result'
@@ -182,7 +171,6 @@ class TopicModelCorpusResult(Base):
             f"corpus_id={self.corpus_id})>"
         )
 
-
 class PerformanceMetric(Base):
     __tablename__ = 'performance_metric'
     __table_args__ = {"schema": "topic_modelling"}
@@ -198,7 +186,6 @@ class PerformanceMetric(Base):
             f"id={self.id}, "
             f"name='{self.name}')>"
         )
-
 
 class ResultPerformance(Base):
     __tablename__ = 'result_performance'
