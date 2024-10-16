@@ -11,5 +11,6 @@ def config():
 
 
 @pytest.fixture(scope="package")
-def test_session():
-    return TestSession(config.database)
+def test_session(config):
+    with TestSession(config.database) as session:
+        yield session
