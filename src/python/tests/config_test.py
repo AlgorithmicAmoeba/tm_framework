@@ -1,7 +1,6 @@
 import pytest
 
-from config import load_config_from_env
-
+from configuration import load_config_from_env
 
 def test_load_config_from_env():
     
