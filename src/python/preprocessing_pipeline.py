@@ -1,7 +1,11 @@
+import concurrent.futures
+
+import sklearn.feature_extraction.text
 from sqlalchemy.orm import Session
+
 from preprocessing import UnicodeTokenizer, Vocabulariser
-from models import Corpus, Document, VocabularyWord, Embedding, DocumentType
-from database import get_session
+from models import Corpus, Document, VocabularyWord, Embedder, Embedding, DocumentType
+import database
 import configuration as cfg
 
 class CorpusProcessing:
@@ -12,20 +16,21 @@ class CorpusProcessing:
         self.vocabulary = vocabulary
         self.tfidf_matrix = tfidf_matrix
 
-def preprocess_texts(texts):
+def preprocess_texts(texts, top_n, executor=None):
     tokenizer = UnicodeTokenizer()
-    vocabulariser = Vocabulariser(top_n=3)
+    vocabulariser = Vocabulariser(top_n)
 
-    tokenized_texts = [tokenizer.tokenize(text) for text in texts]
-    vocabulariser.fit(tokenized_texts)
-    transformed_texts = vocabulariser.transform(tokenized_texts)
+    tokenized_texts = tokenizer.process_texts(texts, executor)
+    transformed_texts = vocabulariser.fit(tokenized_texts, executor)
+
+    tfidf_matrix = sklearn.feature_extraction.text.TfidfVectorizer().fit_transform([' '.join(tokens) for tokens in transformed_texts])
 
     return CorpusProcessing(
         raw_texts=texts,
         tokenized_texts=tokenized_texts,
         transformed_texts=transformed_texts,
         vocabulary=vocabulariser.vocabulary,
-        tfidf_matrix=vocabulariser.tfidf_matrix
+        tfidf_matrix=tfidf_matrix.toarray()
     )
 
 def store_in_database(session: Session, corpus_name: str, corpus_processing: CorpusProcessing):
@@ -74,9 +79,11 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
         )
         session.add(vocabulary_document)
 
+        embedder = session.query(Embedder).filter_by(name='tfidf').first()
+
         # Store TF-IDF embeddings
         embedding = Embedding(
-            embedder_id=1,  # Assuming 1 is the ID for TF-IDF embedder
+            embedder_id=embedder.id,
             document_id=raw_document.id,
             vector=tfidf_vector.tolist()
         )
@@ -84,11 +91,21 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
 
     session.commit()
 
-def run_pipeline(corpus_name: str, texts):
-    db_config = cfg.DatabaseConfig()
-    session = get_session(db_config)()
+def run_pipeline(session, corpus_name: str, texts, executor=None):
+    
 
-    corpus_processing = preprocess_texts(texts)
+    corpus_processing = preprocess_texts(texts, top_n=5000, executor=executor)
     store_in_database(session, corpus_name, corpus_processing)
 
-    session.close()
+
+if __name__ == '__main__':
+    texts = [
+        "Here's an example: text with numbers 123 and punctuation!",
+        "Another text, with more punctuation... and numbers 4567."
+    ]
+    config = cfg.load_config_from_env()
+    db_config = config.database
+
+    with database.get_test_session(db_config) as session:
+        executor = concurrent.futures.ProcessPoolExecutor(max_workers=16)
+        run_pipeline(session, "example_corpus", texts, executor)
