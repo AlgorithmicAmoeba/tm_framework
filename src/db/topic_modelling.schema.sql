@@ -42,6 +42,11 @@ CREATE TABLE topic_modelling.embedder (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+INSERT INTO topic_modelling.embedder (name, description) VALUES 
+    ('bow', 'Bag of Words'), 
+    ('tfidf', 'Term Frequency-Inverse Document Frequency'), 
+    ('SBERT', 'Sentence-BERT');
+
 CREATE TABLE topic_modelling.embedding (
     id SERIAL PRIMARY KEY,
     embedder_id INTEGER REFERENCES topic_modelling.embedder(id),
