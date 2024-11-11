@@ -27,6 +27,10 @@ def get_session(db_config: cfg.DatabaseConfig):
     return __Session
 
 
+def get_test_session(db_config: cfg.DatabaseConfig):
+    return TestSession(db_config)
+
+
 class TestSession:
     """Taken almost verbatim from:
     https://docs.sqlalchemy.org/en/20/orm/session_transaction.html#joining-a-session-into-an-external-transaction-such-as-for-test-suites
