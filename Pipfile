@@ -15,6 +15,7 @@ topmost = "*"
 
 [dev-packages]
 pytest = "*"
+snakeviz = "*"
 
 [requires]
 python_version = "3.11"
