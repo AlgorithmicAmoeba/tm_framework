@@ -1,7 +1,7 @@
 import concurrent.futures
 
-import sklearn.feature_extraction.text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.expression import insert
 
 from preprocessing import UnicodeTokenizer, Vocabulariser
 from models import Corpus, Document, VocabularyWord, Embedder, Embedding, DocumentType
@@ -32,66 +32,71 @@ def preprocess_texts(texts, top_n, executor=None):
     )
 
 def store_in_database(session: Session, corpus_name: str, corpus_processing: CorpusProcessing):
-    corpus = Corpus(name=corpus_name)
-    session.add(corpus)
-
+    
     document_types = {
         'raw': session.query(DocumentType).filter_by(name='raw').first().id,
         'preprocessed': session.query(DocumentType).filter_by(name='preprocessed').first().id,
         'vocabulary_only': session.query(DocumentType).filter_by(name='vocabulary_only').first().id
     }
 
-    for word in corpus_processing.vocabulary:
-        vocab_word = session.query(VocabularyWord).filter_by(word=word, corpus_id=corpus.id).first()
-        if not vocab_word:
-            vocab_word = VocabularyWord(corpus_id=corpus.id, word=word)
-            session.add(vocab_word)
+    embedder = session.query(Embedder).filter_by(name='tfidf').first()
 
-    for text, tokenized_text, transformed_text, tfidf_vector in zip(
-        corpus_processing.raw_texts, 
-        corpus_processing.tokenized_texts, 
-        corpus_processing.transformed_texts, 
-        corpus_processing.tfidf_matrix
-    ):
-        raw_document = Document(
+    corpus = Corpus(name=corpus_name)
+    session.add(corpus)
+    session.flush()
+
+    # Add vocabulary words
+    vocabulary_words = []
+    for word in corpus_processing.vocabulary:
+        vocabulary_words.append(dict(corpus_id=corpus.id, word=word))
+    session.execute(insert(VocabularyWord), vocabulary_words)
+
+    # Add raw documents
+    raw_documents = []
+    for text in corpus_processing.raw_texts:
+        raw_documents.append(dict(
             corpus_id=corpus.id,
             content=text,
             language_code='en',
             type_id=document_types['raw']
-        )
-        session.add(raw_document)
+        ))
+    raw_docs = session.scalars(insert(Document).returning(Document, sort_by_parameter_order=True), raw_documents)
+    raw_doc_ids = [doc.id for doc in raw_docs]
 
-        preprocessed_document = Document(
+    # Add preprocessed documents
+    preprocessed_documents = []
+    for tokenized_text in corpus_processing.tokenized_texts:
+        preprocessed_documents.append(dict(
             corpus_id=corpus.id,
             content=' '.join(tokenized_text),
             language_code='en',
             type_id=document_types['preprocessed']
-        )
-        session.add(preprocessed_document)
+        ))
+    session.execute(insert(Document), preprocessed_documents)
 
-        vocabulary_document = Document(
+    # Add vocabulary documents
+    vocabulary_documents = []
+    for transformed_text in corpus_processing.transformed_texts:
+        vocabulary_documents.append(dict(
             corpus_id=corpus.id,
             content=' '.join(transformed_text),
             language_code='en',
             type_id=document_types['vocabulary_only']
-        )
-        session.add(vocabulary_document)
+        ))
+    session.execute(insert(Document), vocabulary_documents)
 
-        embedder = session.query(Embedder).filter_by(name='tfidf').first()
-
-        # Store TF-IDF embeddings
-        embedding = Embedding(
+    # Add embeddings
+    embeddings = []
+    for doc_id, tfidf_vector in zip(raw_doc_ids, corpus_processing.tfidf_matrix):
+        embeddings.append(dict(
             embedder_id=embedder.id,
-            document_id=raw_document.id,
+            document_id=doc_id,
             vector=tfidf_vector.toarray().tolist()
-        )
-        session.add(embedding)
-
+        ))
+    session.execute(insert(Embedding), embeddings)
     session.commit()
 
 def run_pipeline(session, corpus_name: str, texts, top_n, executor=None):
-    
-
     corpus_processing = preprocess_texts(texts, top_n=top_n, executor=executor)
     store_in_database(session, corpus_name, corpus_processing)
 
