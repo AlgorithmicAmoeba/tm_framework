@@ -7,7 +7,9 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 class UnicodeTokenizer:
-    def __init__(self):
+    def __init__(self, remove_urls: bool = True):
+        self.remove_urls = remove_urls
+
         # Regex to match apostrophes between word characters (unicode)
         self.apostrophe_pattern = re.compile(r"(?<=\w)'|'(?=\w)")
         # Regex to match any punctuation character
@@ -16,8 +18,13 @@ class UnicodeTokenizer:
         self.whitespace_pattern = re.compile(r'\s+')
         # Regex to match any numeric character
         self.numeric_pattern = re.compile(r'\d')
+        # Regex to match URLs
+        self.url_pattern = re.compile(r'https?://\S+')
 
     def clean_text(self, text: str) -> str:
+        # Remove URLs
+        if self.remove_urls:
+            text = self.url_pattern.sub('', text)
         # Replace apostrophes between word characters
         text = self.apostrophe_pattern.sub('', text)
         # Replace punctuation with space
@@ -49,6 +56,8 @@ class Vocabulariser:
     def __init__(self, top_n: int):
         self._top_n = top_n
         self._vocabulary = set()
+        self._vocalulary_scores = None
+        self._tfidf_matrix = None
 
     def fit(self, tokenized_texts: list[list[str]], executor: concurrent.futures.Executor = None) -> list[list[str]]:
         # Join tokenized texts back into strings for TF-IDF processing
@@ -57,17 +66,21 @@ class Vocabulariser:
         # Calculate TF-IDF scores
         vectorizer = TfidfVectorizer(norm=None, use_idf=True, lowercase=False)
         tfidf_matrix = vectorizer.fit_transform(documents)
+        self._tfidf_matrix = tfidf_matrix
+
         feature_names = vectorizer.get_feature_names_out()
 
         # Calculate average TF-IDF scores for each word
-        tfidf_array = tfidf_matrix.toarray()
-        non_zero_counts = (tfidf_array > 0).sum(axis=0)
-        total_scores = tfidf_array.sum(axis=0)
+        non_zero_counts = (tfidf_matrix > 0).sum(axis=0)
+        total_scores = tfidf_matrix.sum(axis=0)
         average_scores = total_scores / np.maximum(non_zero_counts, 1)
 
+        average_scores = average_scores.A1
+
         # Select top N words with highest average scores
-        top_indices = np.argsort(average_scores)[-self._top_n:]
-        self._vocabulary = {feature_names[i] for i in top_indices}
+        top_indices = np.argsort(average_scores)[-self._top_n:][::-1]
+        self._vocabulary = [feature_names[i] for i in top_indices]
+        self._vocalulary_scores = {feature_names[i]: average_scores[i] for i in top_indices}
 
         # Return the transformed texts
         return self.transform(tokenized_texts, executor)
@@ -92,3 +105,11 @@ class Vocabulariser:
     @property
     def top_n(self) -> int:
         return self._top_n
+    
+    @property
+    def vocabulary_scores(self) -> dict[str, float]:
+        return self._vocalulary_scores
+
+    @property
+    def tfidf_matrix(self) -> np.ndarray:
+        return self._tfidf_matrix
