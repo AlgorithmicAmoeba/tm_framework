@@ -5,7 +5,7 @@ import configuration as cfg
 
 # global application scope.  create Session class, engine
 __ENGINE = None
-__Session = None
+__Session_maker = None
 
 
 def get_engine(db_config: cfg.DatabaseConfig):
@@ -18,13 +18,17 @@ def get_engine(db_config: cfg.DatabaseConfig):
     return __ENGINE
 
 
+def _get_session_maker(db_config: cfg.DatabaseConfig):
+    global __Session_maker
+
+    if __Session_maker is None:
+        __Session_maker = sessionmaker(get_engine(db_config))
+
+    return __Session_maker
+
+
 def get_session(db_config: cfg.DatabaseConfig):
-    global __Session
-
-    if __Session is None:
-        __Session = sessionmaker(get_engine(db_config))
-
-    return __Session
+    return _get_session_maker(db_config)()
 
 
 def get_test_session(db_config: cfg.DatabaseConfig):
@@ -47,7 +51,7 @@ class TestSession:
         self.trans = self.connection.begin()
 
         # bind an individual Session to the connection
-        self.session = get_session(self.db_config)(bind=self.connection)
+        self.session = _get_session_maker(self.db_config)(bind=self.connection)
 
         #    optional     #
 
