@@ -23,14 +23,12 @@ def preprocess_texts(texts, top_n, executor=None):
     tokenized_texts = tokenizer.process_texts(texts, executor)
     transformed_texts = vocabulariser.fit(tokenized_texts, executor)
 
-    tfidf_matrix = sklearn.feature_extraction.text.TfidfVectorizer().fit_transform([' '.join(tokens) for tokens in transformed_texts])
-
     return CorpusProcessing(
         raw_texts=texts,
         tokenized_texts=tokenized_texts,
         transformed_texts=transformed_texts,
         vocabulary=vocabulariser.vocabulary,
-        tfidf_matrix=tfidf_matrix.toarray()
+        tfidf_matrix=vocabulariser.tfidf_matrix,
     )
 
 def store_in_database(session: Session, corpus_name: str, corpus_processing: CorpusProcessing):
@@ -85,27 +83,31 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
         embedding = Embedding(
             embedder_id=embedder.id,
             document_id=raw_document.id,
-            vector=tfidf_vector.tolist()
+            vector=tfidf_vector.toarray().tolist()
         )
         session.add(embedding)
 
     session.commit()
 
-def run_pipeline(session, corpus_name: str, texts, executor=None):
+def run_pipeline(session, corpus_name: str, texts, top_n, executor=None):
     
 
-    corpus_processing = preprocess_texts(texts, top_n=5000, executor=executor)
+    corpus_processing = preprocess_texts(texts, top_n=top_n, executor=executor)
     store_in_database(session, corpus_name, corpus_processing)
 
 
 if __name__ == '__main__':
-    texts = [
-        "Here's an example: text with numbers 123 and punctuation!",
-        "Another text, with more punctuation... and numbers 4567."
-    ]
+    import pandas as pd
+
+    splits = {'train': 'topic_train.csv', 'validation': 'topic_valid.csv'}
+    df = pd.read_csv("hf://datasets/zeroshot/twitter-financial-news-topic/" + splits["train"])
+
+    texts = df['text'].tolist()[:1000]
+    top_n = 3000
+
     config = cfg.load_config_from_env()
     db_config = config.database
 
     with database.get_test_session(db_config) as session:
         executor = concurrent.futures.ProcessPoolExecutor(max_workers=16)
-        run_pipeline(session, "example_corpus", texts, executor)
+        run_pipeline(session, "twitter-financial-news-topic", texts, top_n, executor)
