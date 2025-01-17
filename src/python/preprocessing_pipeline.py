@@ -16,9 +16,14 @@ class CorpusProcessing:
         self.vocabulary = vocabulary
         self.tfidf_matrix = tfidf_matrix
 
-def preprocess_texts(texts, top_n, executor=None):
-    tokenizer = UnicodeTokenizer()
-    vocabulariser = Vocabulariser(top_n)
+def preprocess_texts(texts, top_n, executor=None, 
+                    remove_urls=True):
+    tokenizer = UnicodeTokenizer(
+        remove_urls=remove_urls,
+    )
+    vocabulariser = Vocabulariser(
+        top_n=top_n,
+    )
 
     tokenized_texts = tokenizer.process_texts(texts, executor)
     transformed_texts = vocabulariser.fit(tokenized_texts, executor)
@@ -96,8 +101,15 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
     session.execute(insert(Embedding), embeddings)
     session.commit()
 
-def run_pipeline(session, corpus_name: str, texts, top_n, executor=None):
-    corpus_processing = preprocess_texts(texts, top_n=top_n, executor=executor)
+def run_pipeline(session, corpus_name: str, texts, top_n, executor=None,
+                # Tokenizer parameters
+                remove_urls=True,):
+    corpus_processing = preprocess_texts(
+        texts, 
+        top_n=top_n, 
+        executor=executor,
+        remove_urls=remove_urls,
+    )
     store_in_database(session, corpus_name, corpus_processing)
 
 
@@ -115,4 +127,11 @@ if __name__ == '__main__':
 
     with database.get_test_session(db_config) as session:
         executor = concurrent.futures.ProcessPoolExecutor(max_workers=16)
-        run_pipeline(session, "twitter-financial-news-topic", texts, top_n, executor)
+        run_pipeline(
+            session, 
+            "twitter-financial-news-topic", 
+            texts, 
+            top_n=3000,
+            executor=executor,
+            remove_urls=True,
+        )
