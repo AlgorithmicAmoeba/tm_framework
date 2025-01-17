@@ -82,6 +82,9 @@ class Vocabulariser:
         self._vocabulary = [feature_names[i] for i in top_indices]
         self._vocalulary_scores = {feature_names[i]: average_scores[i] for i in top_indices}
 
+        # Update the tfidf_matrix to only include the top N
+        self._tfidf_matrix = tfidf_matrix[:, top_indices]
+
         # Return the transformed texts
         return self.transform(tokenized_texts, executor)
 
