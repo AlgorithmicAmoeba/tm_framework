@@ -113,6 +113,22 @@ def run_pipeline(session, corpus_name: str, texts, top_n, executor=None,
     store_in_database(session, corpus_name, corpus_processing)
 
 
+def delete_corpus(session: Session, corpus_name: str):
+    corpus = session.query(Corpus).filter_by(name=corpus_name).first()
+    if corpus is None:
+        raise ValueError(f"Corpus '{corpus_name}' not found")
+    
+    # Remove embeddings, documents, vocabulary words
+    # Remove embeddings by document
+    session.query(Embedding).filter(Embedding.document_id.in_(
+        session.query(Document.id).filter_by(corpus_id=corpus.id)
+    )).delete(synchronize_session=False)
+    session.query(Document).filter_by(corpus_id=corpus.id).delete()
+    session.query(VocabularyWord).filter_by(corpus_id=corpus.id).delete()
+    session.query(Corpus).filter_by(id=corpus.id).delete()
+    session.commit()
+
+
 if __name__ == '__main__':
     import pandas as pd
 
@@ -125,11 +141,12 @@ if __name__ == '__main__':
     config = cfg.load_config_from_env()
     db_config = config.database
 
-    with database.get_test_session(db_config) as session:
+    with database.get_session(db_config) as session:
         executor = concurrent.futures.ProcessPoolExecutor(max_workers=16)
+        delete_corpus(session, "twitter-financial-news-topic-partial")
         run_pipeline(
             session, 
-            "twitter-financial-news-topic", 
+            "twitter-financial-news-topic-partial", 
             texts, 
             top_n=3000,
             executor=executor,
