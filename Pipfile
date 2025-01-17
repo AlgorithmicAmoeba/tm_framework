@@ -12,6 +12,7 @@ psycopg2-binary = "*"
 sentence-transformers = "*"
 bertopic = "*"
 topmost = "*"
+gensim = "*"
 
 [dev-packages]
 pytest = "*"
