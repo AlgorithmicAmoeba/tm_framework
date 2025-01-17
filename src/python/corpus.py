@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-from .models import Corpus as CorpusModel
-from .models import Document, DocumentType, Embedding, Embedder, VocabularyWord
+from models import Corpus as CorpusModel
+from models import Document, DocumentType, Embedding, Embedder, VocabularyWord
 
 class Corpus:
     def __init__(self, session: Session, name: str):
