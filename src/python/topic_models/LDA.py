@@ -15,7 +15,7 @@ class LDA:
 
     def train(self):
         tfidf_vector_obj = self.corpus.get_document_vectors('tfidf')
-        tfidf_vectors = np.array([tfidf_vector.vector[0] for tfidf_vector in tfidf_vector_obj])
+        tfidf_vectors = np.array([tfidf_vector.vector for tfidf_vector in tfidf_vector_obj])
         self.corpus_lda = gensim.matutils.Scipy2Corpus(tfidf_vectors)
         _idx2word = {vocab_word.id: vocab_word.word for vocab_word in self.corpus.get_vocabulary()}
         self.idx2word = {idx: word for idx, (_, word) in enumerate(sorted(_idx2word.items()))}
@@ -24,7 +24,7 @@ class LDA:
             self.corpus_lda,
             num_topics=self.num_topics,
             id2word=self.idx2word,
-            passes=10,
+            # passes=10,
             random_state=42,
         )
 
@@ -54,8 +54,10 @@ if __name__ == '__main__':
     with database.get_session(db_config) as session:
         topics = run_lda_on_corpus(
             session,
-            corpus_name='twitter-financial-news-topic-partial',
-            num_topics=10,
+            # corpus_name='twitter-financial-news-topic-partial',
+            # corpus_name='newsgroups',
+            corpus_name='newsgroups-octis',
+            num_topics=20,
         )
         for topic in topics:
             print(topic)
