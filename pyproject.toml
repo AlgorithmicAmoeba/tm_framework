@@ -12,6 +12,8 @@ dependencies = [
     "bertopic",
     "topmost",
     "gensim",
+    "spacy>=3.8.4",
+    "pip>=24.3.1",
 ]
 
 [dependency-groups]
