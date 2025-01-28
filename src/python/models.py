@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Float, ForeignKey, ARRAY
+from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Float, ForeignKey, ARRAY, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
@@ -60,12 +60,16 @@ class Document(Base):
 
 class VocabularyWord(Base):
     __tablename__ = 'vocabulary_word'
-    __table_args__ = {"schema": "topic_modelling"}
+    __table_args__ = {
+        "schema": "topic_modelling",
+        }
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     corpus_id = Column(Integer, ForeignKey('topic_modelling.corpus.id'))
-    word = Column(String(255), unique=True, nullable=False)
+    word = Column(String(255), nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    UniqueConstraint('corpus_id', 'word', name='uix_corpus_word')
+
     
     corpus = relationship("Corpus")
 

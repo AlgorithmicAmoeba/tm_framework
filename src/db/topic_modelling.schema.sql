@@ -31,8 +31,9 @@ CREATE TABLE topic_modelling.document (
 CREATE TABLE topic_modelling.vocabulary_word (
     id SERIAL PRIMARY KEY,
     corpus_id INTEGER REFERENCES topic_modelling.corpus(id),
-    word VARCHAR(255) UNIQUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    word VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(corpus_id, word)
 );
 
 CREATE TABLE topic_modelling.embedder (
