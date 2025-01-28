@@ -1,10 +1,11 @@
 import re
 import string
-import concurrent.futures
 from typing import Optional
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
+import spacy
+import tqdm
 
 class UnicodeTokenizer:
     def __init__(self, remove_urls: bool = True):
@@ -42,61 +43,83 @@ class UnicodeTokenizer:
         tokens = [token.lower() for token in tokens if token and not self.numeric_pattern.search(token)]
         return tokens
 
-    def process_texts(self, texts: list[str], executor: Optional[concurrent.futures.Executor] = None) -> list[list[str]]:
-        if executor is None:
-            # Process sequentially if no executor is provided
-            return [self.tokenize(text) for text in texts]
-        else:
-            # Use the executor for parallel processing
-            futures = [executor.submit(self.tokenize, text) for text in texts]
-            return [future.result() for future in concurrent.futures.as_completed(futures)]
+    def process_texts(self, texts: list[str]) -> list[list[str]]:
+        return [self.tokenize(text) for text in tqdm.tqdm(texts, desc="Tokenizing")]
 
 
 class Vocabulariser:
-    def __init__(self, top_n: int):
+    def __init__(self,
+            top_n: int,
+            min_words_per_document: Optional[int] = None, 
+            min_df: float = 0.0,
+            max_df: float = 1.0,
+            min_chars: int = 3,
+            remove_stopwords: bool = False,
+        ):
         self._top_n = top_n
+        self._min_words_per_document = min_words_per_document
+        self._min_df = min_df
+        self._max_df = max_df
+        self._min_chars = min_chars
+        self._remove_stopwords = remove_stopwords
+
         self._vocabulary = set()
         self._vocalulary_scores = None
         self._tfidf_matrix = None
 
-    def fit(self, tokenized_texts: list[list[str]], executor: concurrent.futures.Executor = None) -> list[list[str]]:
+        self._spacy_model = spacy.load(
+            'en_core_web_sm',
+            exclude=['tok2vec', 'attribute_ruler', 'ner']
+        )
+
+    def fit_transform(self, tokenized_texts: list[list[str]]) -> list[list[str]]:
+        if self._remove_stopwords:
+            tokenized_texts = [
+                [token for token in tokens if not self._spacy_model.vocab[token].is_stop]
+                for tokens in tokenized_texts
+            ]
+
         # Join tokenized texts back into strings for TF-IDF processing
         documents = [' '.join(tokens) for tokens in tokenized_texts]
 
-        # Calculate TF-IDF scores
-        vectorizer = TfidfVectorizer(norm=None, use_idf=True, lowercase=False)
+        big_vocabulary = set(word for tokens in tokenized_texts for word in tokens if len(word) >= self._min_chars)
+
+        # Calculate TF-IDF scores with document frequency filtering
+        vectorizer = TfidfVectorizer(
+            norm=None,
+            lowercase=False,
+            min_df=self._min_df,
+            max_df=self._max_df,
+            max_features=self._top_n,
+            token_pattern=rf"(?u)\b[\w|\-]{{{self._min_chars},}}\b"  # Modified to use min_chars
+        )
         tfidf_matrix = vectorizer.fit_transform(documents)
         self._tfidf_matrix = tfidf_matrix
 
         feature_names = vectorizer.get_feature_names_out()
 
-        # Calculate average TF-IDF scores for each word
-        non_zero_counts = (tfidf_matrix > 0).sum(axis=0)
-        total_scores = tfidf_matrix.sum(axis=0)
-        average_scores = total_scores / np.maximum(non_zero_counts, 1)
+        self._vocabulary = set(feature_names)
 
-        average_scores = average_scores.A1
+        print(f"Vocabulary filtered from {len(big_vocabulary)} to {len(feature_names)} words")
 
-        # Select top N words with highest average scores
-        top_indices = np.argsort(average_scores)[-self._top_n:][::-1]
-        self._vocabulary = [feature_names[i] for i in top_indices]
-        self._vocalulary_scores = {feature_names[i]: average_scores[i] for i in top_indices}
+        filtered_texts = [self._filter_tokens(tokens) for tokens in tqdm.tqdm(tokenized_texts, desc="Filtering")]
+        text_lens = [len(tokens) for tokens in filtered_texts]
+        min_words_threshold_mask = [text_len >= self._min_words_per_document for text_len in text_lens]
+        filtered_texts = [filtered_texts[i] for i, mask in enumerate(min_words_threshold_mask) if mask]
 
-        # Update the tfidf_matrix to only include the top N
-        self._tfidf_matrix = tfidf_matrix[:, top_indices]
+        print(f"Filtered documents from {len(tokenized_texts)} to {len(filtered_texts)}")
+
+        self._tfidf_matrix = tfidf_matrix[min_words_threshold_mask]
 
         # Return the transformed texts
-        return self.transform(tokenized_texts, executor)
+        return filtered_texts
 
-    def transform(self, tokenized_texts: list[list[str]], executor: concurrent.futures.Executor = None) -> list[list[str]]:
+    def transform(self, tokenized_texts: list[list[str]], filter_tfidf=False) -> list[list[str]]:
         if not self._vocabulary:
             raise ValueError("Vocabulary has not been determined. Call 'fit' before 'transform'.")
         
-        if executor is None:
-            return [self._filter_tokens(tokens) for tokens in tokenized_texts]
-        else:
-            futures = [executor.submit(self._filter_tokens, tokens) for tokens in tokenized_texts]
-            return [future.result() for future in concurrent.futures.as_completed(futures)]
+        filtered_texts = [self._filter_tokens(tokens) for tokens in tqdm.tqdm(tokenized_texts, desc="Filtering")]
+        return filtered_texts
 
     def _filter_tokens(self, tokens: list[str]) -> list[str]:
         return [token for token in tokens if token in self._vocabulary]

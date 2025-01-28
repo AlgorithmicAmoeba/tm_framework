@@ -1,7 +1,8 @@
-import concurrent.futures
+import warnings
 
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import insert
+import tqdm
 
 from preprocessing import UnicodeTokenizer, Vocabulariser
 from models import Corpus, Document, VocabularyWord, Embedder, Embedding, DocumentType
@@ -16,17 +17,30 @@ class CorpusProcessing:
         self.vocabulary = vocabulary
         self.tfidf_matrix = tfidf_matrix
 
-def preprocess_texts(texts, top_n, executor=None, 
-                    remove_urls=True):
+def preprocess_texts(
+        texts,
+        top_n, 
+        min_words_per_document,
+        min_df,
+        max_df,
+        min_chars,
+        remove_urls,
+        remove_stopwords,
+    ):
     tokenizer = UnicodeTokenizer(
         remove_urls=remove_urls,
     )
     vocabulariser = Vocabulariser(
         top_n=top_n,
+        min_words_per_document=min_words_per_document,
+        min_df=min_df,
+        max_df=max_df,
+        min_chars=min_chars,
+        remove_stopwords=remove_stopwords,
     )
 
-    tokenized_texts = tokenizer.process_texts(texts, executor)
-    transformed_texts = vocabulariser.fit(tokenized_texts, executor)
+    tokenized_texts = tokenizer.process_texts(texts)
+    transformed_texts = vocabulariser.fit_transform(tokenized_texts)
 
     return CorpusProcessing(
         raw_texts=texts,
@@ -37,7 +51,6 @@ def preprocess_texts(texts, top_n, executor=None,
     )
 
 def store_in_database(session: Session, corpus_name: str, corpus_processing: CorpusProcessing):
-    
     document_types = {
         'raw': session.query(DocumentType).filter_by(name='raw').first().id,
         'preprocessed': session.query(DocumentType).filter_by(name='preprocessed').first().id,
@@ -46,76 +59,99 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
 
     embedder = session.query(Embedder).filter_by(name='tfidf').first()
 
+    pbar = tqdm.tqdm(total=7, desc="Starting database storage")
+    
     corpus = Corpus(name=corpus_name)
     session.add(corpus)
     session.flush()
+    pbar.update(1)
 
     # Add vocabulary words
-    vocabulary_words = []
-    for word in corpus_processing.vocabulary:
-        vocabulary_words.append(dict(corpus_id=corpus.id, word=word))
+    pbar.set_description("Adding vocabulary words")
+    vocabulary_words = [dict(corpus_id=corpus.id, word=word) for word in set(corpus_processing.vocabulary)]
     session.execute(insert(VocabularyWord), vocabulary_words)
+    pbar.update(1)
 
     # Add raw documents
-    raw_documents = []
-    for text in corpus_processing.raw_texts:
-        raw_documents.append(dict(
-            corpus_id=corpus.id,
-            content=text,
-            language_code='en',
-            type_id=document_types['raw']
-        ))
+    pbar.set_description("Adding raw documents")
+    raw_documents = [dict(
+        corpus_id=corpus.id,
+        content=text,
+        language_code='en',
+        type_id=document_types['raw']
+    ) for text in corpus_processing.raw_texts]
     raw_docs = session.scalars(insert(Document).returning(Document, sort_by_parameter_order=True), raw_documents)
     raw_doc_ids = [doc.id for doc in raw_docs]
+    pbar.update(1)
 
     # Add preprocessed documents
-    preprocessed_documents = []
-    for tokenized_text in corpus_processing.tokenized_texts:
-        preprocessed_documents.append(dict(
-            corpus_id=corpus.id,
-            content=' '.join(tokenized_text),
-            language_code='en',
-            type_id=document_types['preprocessed']
-        ))
+    pbar.set_description("Adding preprocessed documents")
+    preprocessed_documents = [dict(
+        corpus_id=corpus.id,
+        content=' '.join(tokenized_text),
+        language_code='en',
+        type_id=document_types['preprocessed']
+    ) for tokenized_text in corpus_processing.tokenized_texts]
     session.execute(insert(Document), preprocessed_documents)
+    pbar.update(1)
 
     # Add vocabulary documents
-    vocabulary_documents = []
-    for transformed_text in corpus_processing.transformed_texts:
-        vocabulary_documents.append(dict(
-            corpus_id=corpus.id,
-            content=' '.join(transformed_text),
-            language_code='en',
-            type_id=document_types['vocabulary_only']
-        ))
+    pbar.set_description("Adding vocabulary-only documents")
+    vocabulary_documents = [dict(
+        corpus_id=corpus.id,
+        content=' '.join(transformed_text),
+        language_code='en',
+        type_id=document_types['vocabulary_only']
+    ) for transformed_text in corpus_processing.transformed_texts]
     session.execute(insert(Document), vocabulary_documents)
+    pbar.update(1)
 
     # Add embeddings
-    embeddings = []
-    for doc_id, tfidf_vector in zip(raw_doc_ids, corpus_processing.tfidf_matrix):
-        embeddings.append(dict(
-            embedder_id=embedder.id,
-            document_id=doc_id,
-            vector=tfidf_vector.toarray().tolist()
-        ))
+    pbar.set_description("Adding embeddings")
+    embeddings = [dict(
+        embedder_id=embedder.id,
+        document_id=doc_id,
+        vector=tfidf_vector.toarray().tolist()[0]
+    ) for doc_id, tfidf_vector in zip(raw_doc_ids, corpus_processing.tfidf_matrix)]
     session.execute(insert(Embedding), embeddings)
-    session.commit()
+    pbar.update(1)
 
-def run_pipeline(session, corpus_name: str, texts, top_n, executor=None,
-                # Tokenizer parameters
-                remove_urls=True,):
+    pbar.set_description("Committing changes")
+    session.commit()
+    pbar.update(1)
+    pbar.close()
+
+def run_pipeline(
+    session: Session,
+    corpus_name: str,
+    texts: list[str],
+    top_n: int,
+    min_words_per_document: int,
+    min_df: float,
+    max_df: float,
+    min_chars: int,
+    remove_urls: bool,
+    remove_stopwords: bool,
+    ):
     corpus_processing = preprocess_texts(
         texts, 
-        top_n=top_n, 
-        executor=executor,
+        top_n=top_n,
+        min_words_per_document=min_words_per_document,
+        min_df=min_df,
+        max_df=max_df,
+        min_chars=min_chars, 
         remove_urls=remove_urls,
+        remove_stopwords=remove_stopwords,
     )
     store_in_database(session, corpus_name, corpus_processing)
 
 
-def delete_corpus(session: Session, corpus_name: str):
+def delete_corpus(session: Session, corpus_name: str, if_exists: bool = False):
     corpus = session.query(Corpus).filter_by(name=corpus_name).first()
     if corpus is None:
+        if if_exists:
+            warnings.warn(f"Corpus '{corpus_name}' not found")
+            return
         raise ValueError(f"Corpus '{corpus_name}' not found")
     
     # Remove embeddings, documents, vocabulary words
@@ -129,26 +165,136 @@ def delete_corpus(session: Session, corpus_name: str):
     session.commit()
 
 
-if __name__ == '__main__':
-    import pandas as pd
-
+def twitter_financial_news_topic_pipeline(session: Session, subset: int = None):
     splits = {'train': 'topic_train.csv', 'validation': 'topic_valid.csv'}
     df = pd.read_csv("hf://datasets/zeroshot/twitter-financial-news-topic/" + splits["train"])
 
-    texts = df['text'].tolist()[:1000]
+    texts = df['text'].tolist()
+    if subset is not None:
+        texts = texts[:subset]
     top_n = 3000
+
+    delete_corpus(session, "twitter-financial-news-topic-partial", if_exists=True)
+    run_pipeline(
+        session, 
+        "twitter-financial-news-topic-partial", 
+        texts, 
+        top_n=top_n,
+        remove_urls=True,
+    )
+
+def newsgroups_pipeline(
+        session: Session,
+        subset: int = None,
+    ):
+    from sklearn.datasets import fetch_20newsgroups
+
+    newsgroups = fetch_20newsgroups(subset='all')
+    texts = newsgroups.data
+    if subset is not None:
+        texts = texts[:subset]
+    top_n = 3000
+
+    delete_corpus(session, "newsgroups", if_exists=True)
+    run_pipeline(
+        session, 
+        "newsgroups", 
+        texts, 
+        top_n=top_n,
+        remove_urls=True,
+        min_words_per_document=5,
+        min_df=0.005,
+        max_df=0.6,
+        min_chars=3,
+        remove_stopwords=True,
+    )
+
+def newsgroups_pipeline_octis(
+        session: Session,
+        subset: int = None,
+    ):
+    """Process the newsgroups dataset using OCTIS preprocessing"""
+    from sklearn.datasets import fetch_20newsgroups
+    import tempfile
+    import os
+    from octis_preprocessing import Preprocessing, Dataset
+
+    # Fetch the data
+    newsgroups = fetch_20newsgroups(subset='all')
+    texts = newsgroups.data
+    if subset is not None:
+        texts = texts[:subset]
+
+    # Create temporary files for OCTIS processing
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f_docs:
+        for text in texts:
+            text = text.replace('\n', '')
+            f_docs.write(f"{text}\n")
+        docs_path = f_docs.name
+
+    try:
+        # Initialize OCTIS preprocessing
+        preprocessor = Preprocessing(
+            lowercase=True,
+            min_chars=3,
+            min_words_docs=5,
+            min_df=0.005,
+            max_df=0.6,
+            remove_punctuation=True,
+            remove_numbers=True,
+            lemmatize=False,
+            stopword_list='english',
+            language='english',
+            verbose=True,
+            split=False  # We don't need OCTIS to split the data
+        )
+
+        # Process the dataset
+        dataset = preprocessor.preprocess_dataset(docs_path)
+        corpus = dataset.get_corpus()
+        vocabulary = dataset.get_vocabulary()
+
+        # build tfidf matrix using corpus and vocabulary
+        # Convert tokenized corpus back to strings for TfidfVectorizer
+        corpus_strings = [' '.join(doc) for doc in corpus]
+
+        # Create TfidfVectorizer with fixed vocabulary
+        vectorizer = TfidfVectorizer(vocabulary=vocabulary)
+        tfidf_matrix = vectorizer.fit_transform(corpus_strings)
+
+
+        # Store in database
+        delete_corpus(session, "newsgroups-octis", if_exists=True)
+        corpus_processing = CorpusProcessing(
+            raw_texts=texts,
+            tokenized_texts=corpus,  # OCTIS already tokenized
+            transformed_texts=corpus,  # Using same as tokenized since OCTIS already filtered vocabulary
+            vocabulary=vocabulary,
+            tfidf_matrix=tfidf_matrix,
+        )
+        store_in_database(session, "newsgroups-octis", corpus_processing)
+
+    finally:
+        # Clean up temporary files
+        os.unlink(docs_path)
+
+if __name__ == '__main__':
+    import pandas as pd
+    from sklearn.feature_extraction.text import TfidfVectorizer
 
     config = cfg.load_config_from_env()
     db_config = config.database
 
     with database.get_session(db_config) as session:
-        executor = concurrent.futures.ProcessPoolExecutor(max_workers=16)
-        delete_corpus(session, "twitter-financial-news-topic-partial")
-        run_pipeline(
-            session, 
-            "twitter-financial-news-topic-partial", 
-            texts, 
-            top_n=3000,
-            executor=executor,
-            remove_urls=True,
-        )
+        # twitter_financial_news_topic_pipeline(session, subset=1000)
+        
+        # Choose which preprocessing pipeline to use
+        use_octis = True
+        subset = None
+        
+        if use_octis:
+            newsgroups_pipeline_octis(session, subset=subset)
+        else:
+            newsgroups_pipeline(session, subset=subset)
+
+

@@ -54,7 +54,7 @@ def test_vocabulariser():
     tokenized_texts = [tokenizer.tokenize(text) for text in texts]
 
     # Fit the vocabulariser
-    vocabulariser.fit(tokenized_texts)
+    vocabulariser.fit_transform(tokenized_texts)
 
     # Transform the texts
     transformed_texts = vocabulariser.transform(tokenized_texts)
