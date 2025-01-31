@@ -67,9 +67,10 @@ class VocabularyWord(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     corpus_id = Column(Integer, ForeignKey('topic_modelling.corpus.id'))
     word = Column(String(255), nullable=False)
+    word_index = Column(Integer, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     UniqueConstraint('corpus_id', 'word', name='uix_corpus_word')
-
+    UniqueConstraint('corpus_id', 'word_index', name='uix_corpus_word_index')
     
     corpus = relationship("Corpus")
 

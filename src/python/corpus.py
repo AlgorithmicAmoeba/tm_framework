@@ -52,10 +52,10 @@ class Corpus:
         )
 
     def get_vocabulary(self) -> list[str]:
-        """Get all vocabulary words in the corpus."""
+        """Get all vocabulary words in the corpus, ordered by word_index."""
         return (
             self.session.query(VocabularyWord)
             .filter_by(corpus_id=self.corpus.id)
-            .order_by(VocabularyWord.word)
+            .order_by(VocabularyWord.word_index)
             .all()
         )
