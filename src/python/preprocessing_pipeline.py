@@ -1,10 +1,11 @@
 import warnings
+import re
 
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import insert
 import tqdm
 
-from preprocessing import UnicodeTokenizer, Vocabulariser
+from preprocessing import TextPreprocessor
 from models import Corpus, Document, VocabularyWord, Embedder, Embedding, DocumentType
 import database
 import configuration as cfg
@@ -20,34 +21,31 @@ class CorpusProcessing:
 def preprocess_texts(
         texts,
         top_n, 
-        min_words_per_document,
-        min_df,
-        max_df,
-        min_chars,
-        remove_urls,
-        remove_stopwords,
+        min_words_per_document=None,
+        min_df=0.0,
+        max_df=1.0,
+        min_chars=3,
+        remove_urls=True,
+        remove_stopwords=False,
     ):
-    tokenizer = UnicodeTokenizer(
-        remove_urls=remove_urls,
-    )
-    vocabulariser = Vocabulariser(
+    preprocessor = TextPreprocessor(
         top_n=top_n,
         min_words_per_document=min_words_per_document,
         min_df=min_df,
         max_df=max_df,
         min_chars=min_chars,
-        remove_stopwords=remove_stopwords,
+        remove_urls=remove_urls,
+        remove_stopwords=remove_stopwords
     )
 
-    tokenized_texts = tokenizer.process_texts(texts)
-    transformed_texts = vocabulariser.fit_transform(tokenized_texts)
+    transformed_texts = preprocessor.fit_transform(texts)
 
     return CorpusProcessing(
         raw_texts=texts,
-        tokenized_texts=tokenized_texts,
+        tokenized_texts=preprocessor.process_texts(texts),  # Get tokenized version
         transformed_texts=transformed_texts,
-        vocabulary=vocabulariser.vocabulary,
-        tfidf_matrix=vocabulariser.tfidf_matrix,
+        vocabulary=preprocessor.vocabulary,
+        tfidf_matrix=preprocessor.tfidf_matrix,
     )
 
 def store_in_database(session: Session, corpus_name: str, corpus_processing: CorpusProcessing):
@@ -66,9 +64,12 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
     session.flush()
     pbar.update(1)
 
-    # Add vocabulary words
+    # Add vocabulary words with index
     pbar.set_description("Adding vocabulary words")
-    vocabulary_words = [dict(corpus_id=corpus.id, word=word) for word in set(corpus_processing.vocabulary)]
+    vocabulary_words = [
+        dict(corpus_id=corpus.id, word=word, word_index=idx) 
+        for idx, word in enumerate(corpus_processing.vocabulary)
+    ]
     session.execute(insert(VocabularyWord), vocabulary_words)
     pbar.update(1)
 
@@ -187,14 +188,19 @@ def newsgroups_pipeline(
         session: Session,
         subset: int = None,
     ):
-    from sklearn.datasets import fetch_20newsgroups
 
-    newsgroups = fetch_20newsgroups(subset='all')
+    from sklearn.datasets import fetch_20newsgroups
+    
+    # Fetch and clean data
+    newsgroups = fetch_20newsgroups(
+        subset='all',
+        remove=('headers', 'footers', 'quotes'),
+    )
     texts = newsgroups.data
     if subset is not None:
         texts = texts[:subset]
-    top_n = 3000
-
+    
+    top_n = None
     delete_corpus(session, "newsgroups", if_exists=True)
     run_pipeline(
         session, 
@@ -204,7 +210,7 @@ def newsgroups_pipeline(
         remove_urls=True,
         min_words_per_document=5,
         min_df=0.005,
-        max_df=0.6,
+        max_df=1.0,
         min_chars=3,
         remove_stopwords=True,
     )
@@ -219,8 +225,11 @@ def newsgroups_pipeline_octis(
     import os
     from octis_preprocessing import Preprocessing, Dataset
 
-    # Fetch the data
-    newsgroups = fetch_20newsgroups(subset='all')
+    # Fetch and clean data
+    newsgroups = fetch_20newsgroups(
+        subset='all',
+        remove=('headers', 'footers', 'quotes'),
+    )
     texts = newsgroups.data
     if subset is not None:
         texts = texts[:subset]
@@ -228,7 +237,7 @@ def newsgroups_pipeline_octis(
     # Create temporary files for OCTIS processing
     with tempfile.NamedTemporaryFile(mode='w', delete=False) as f_docs:
         for text in texts:
-            text = text.replace('\n', '')
+            text = text.replace('\n', ' ')
             f_docs.write(f"{text}\n")
         docs_path = f_docs.name
 
@@ -239,10 +248,10 @@ def newsgroups_pipeline_octis(
             min_chars=3,
             min_words_docs=5,
             min_df=0.005,
-            max_df=0.6,
+            max_df=1.0,
             remove_punctuation=True,
             remove_numbers=True,
-            lemmatize=False,
+            lemmatize=True,
             stopword_list='english',
             language='english',
             verbose=True,

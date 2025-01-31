@@ -55,8 +55,8 @@ if __name__ == '__main__':
         topics = run_lda_on_corpus(
             session,
             # corpus_name='twitter-financial-news-topic-partial',
-            # corpus_name='newsgroups',
-            corpus_name='newsgroups-octis',
+            corpus_name='newsgroups',
+            # corpus_name='newsgroups-octis',
             num_topics=20,
         )
         for topic in topics:
