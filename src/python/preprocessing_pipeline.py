@@ -144,7 +144,7 @@ def run_pipeline(
         remove_urls=remove_urls,
         remove_stopwords=remove_stopwords,
     )
-    delete_corpus(session, "newsgroups", if_exists=True)
+    delete_corpus(session, corpus_name, if_exists=True)
     store_in_database(session, corpus_name, corpus_processing)
 
 
@@ -217,6 +217,37 @@ def newsgroups_pipeline(
         remove_stopwords=True,
     )
 
+def wikipedia_pipeline(
+        session: Session,
+        file_path: str,
+        subset: int = None,
+    ):
+    """Process Wikipedia articles from a JSON Lines file."""
+    import json
+    
+    # Read JSON Lines file
+    texts = []
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            article = json.loads(line)
+            texts.append(article['text'])
+    
+    if subset is not None:
+        texts = texts[:subset]
+    
+    run_pipeline(
+        session, 
+        "wikipedia_sample", 
+        texts, 
+        top_n=None,
+        remove_urls=True,
+        min_words_per_document=10,
+        min_df=0.02,
+        max_df=0.7,
+        min_chars=3,
+        remove_stopwords=True,
+    )
+
 if __name__ == '__main__':
     import pandas as pd
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -225,7 +256,11 @@ if __name__ == '__main__':
     db_config = config.database
 
     with database.get_session(db_config) as session:
-        twitter_financial_news_topic_pipeline(session)
-        newsgroups_pipeline(session)
+        # twitter_financial_news_topic_pipeline(session)
+        # newsgroups_pipeline(session)
+        wikipedia_pipeline(
+            session,
+            'ignore/raw_data/wikipedia_20k_sample.jsonl'
+        )
 
 

@@ -132,9 +132,16 @@ class TextPreprocessor:
         if not self._lemmatize and not self._remove_stopwords:
             return texts
         
-        tokenized_texts = list(self._spacy_model.pipe(texts, batch_size=100, n_process=16, disable=['ner']))
+        disable = [
+            "tok2vec",
+            "parser",
+            # "attribute_ruler",
+            "ner"
+        ]
+        
+        tokenized_texts = list(self._spacy_model.pipe(texts, batch_size=100, n_process=16, disable=disable))
         # tokenized_texts = [
-        #     self._spacy_model(text) for text in tqdm.tqdm(texts, desc="Spacy tokenizing")
+        #     self._spacy_model(text, disable=disable) for text in tqdm.tqdm(texts, desc="Spacy tokenizing")
         # ]
 
         if self._remove_stopwords:
