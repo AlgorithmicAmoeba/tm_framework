@@ -217,78 +217,6 @@ def newsgroups_pipeline(
         remove_stopwords=True,
     )
 
-def newsgroups_pipeline_octis(
-        session: Session,
-        subset: int = None,
-    ):
-    """Process the newsgroups dataset using OCTIS preprocessing"""
-    from sklearn.datasets import fetch_20newsgroups
-    import tempfile
-    import os
-    from octis_preprocessing import Preprocessing, Dataset
-
-    # Fetch and clean data
-    newsgroups = fetch_20newsgroups(
-        subset='all',
-        remove=('headers', 'footers', 'quotes'),
-    )
-    texts = newsgroups.data
-    if subset is not None:
-        texts = texts[:subset]
-
-    # Create temporary files for OCTIS processing
-    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f_docs:
-        for text in texts:
-            text = text.replace('\n', ' ')
-            f_docs.write(f"{text}\n")
-        docs_path = f_docs.name
-
-    try:
-        # Initialize OCTIS preprocessing
-        preprocessor = Preprocessing(
-            lowercase=True,
-            min_chars=3,
-            min_words_docs=5,
-            min_df=0.005,
-            max_df=1.0,
-            remove_punctuation=True,
-            remove_numbers=True,
-            lemmatize=True,
-            stopword_list='english',
-            language='english',
-            verbose=True,
-            split=False  # We don't need OCTIS to split the data
-        )
-
-        # Process the dataset
-        dataset = preprocessor.preprocess_dataset(docs_path)
-        corpus = dataset.get_corpus()
-        vocabulary = dataset.get_vocabulary()
-
-        # build tfidf matrix using corpus and vocabulary
-        # Convert tokenized corpus back to strings for TfidfVectorizer
-        corpus_strings = [' '.join(doc) for doc in corpus]
-
-        # Create TfidfVectorizer with fixed vocabulary
-        vectorizer = TfidfVectorizer(vocabulary=vocabulary)
-        tfidf_matrix = vectorizer.fit_transform(corpus_strings)
-
-
-        # Store in database
-        delete_corpus(session, "newsgroups-octis", if_exists=True)
-        corpus_processing = CorpusProcessing(
-            raw_texts=texts,
-            tokenized_texts=corpus,  # OCTIS already tokenized
-            transformed_texts=corpus,  # Using same as tokenized since OCTIS already filtered vocabulary
-            vocabulary=vocabulary,
-            tfidf_matrix=tfidf_matrix,
-        )
-        store_in_database(session, "newsgroups-octis", corpus_processing)
-
-    finally:
-        # Clean up temporary files
-        os.unlink(docs_path)
-
 if __name__ == '__main__':
     import pandas as pd
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -298,14 +226,6 @@ if __name__ == '__main__':
 
     with database.get_session(db_config) as session:
         twitter_financial_news_topic_pipeline(session)
-        
-        # Choose which preprocessing pipeline to use
-        # use_octis = False
-        # subset = None
-        
-        # if use_octis:
-        #     newsgroups_pipeline_octis(session, subset=subset)
-        # else:
-        #     newsgroups_pipeline(session, subset=subset)
+        newsgroups_pipeline(session)
 
 
