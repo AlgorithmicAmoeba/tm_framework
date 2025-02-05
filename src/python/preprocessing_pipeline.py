@@ -42,7 +42,7 @@ def preprocess_texts(
 
     return CorpusProcessing(
         raw_texts=texts,
-        tokenized_texts=preprocessor.process_texts(texts),  # Get tokenized version
+        tokenized_texts=preprocessor.tokenized_texts,
         transformed_texts=transformed_texts,
         vocabulary=preprocessor.vocabulary,
         tfidf_matrix=preprocessor.tfidf_matrix,
@@ -144,6 +144,7 @@ def run_pipeline(
         remove_urls=remove_urls,
         remove_stopwords=remove_stopwords,
     )
+    delete_corpus(session, "newsgroups", if_exists=True)
     store_in_database(session, corpus_name, corpus_processing)
 
 
@@ -173,15 +174,18 @@ def twitter_financial_news_topic_pipeline(session: Session, subset: int = None):
     texts = df['text'].tolist()
     if subset is not None:
         texts = texts[:subset]
-    top_n = 3000
 
-    delete_corpus(session, "twitter-financial-news-topic-partial", if_exists=True)
     run_pipeline(
         session, 
         "twitter-financial-news-topic-partial", 
         texts, 
-        top_n=top_n,
+        top_n=None,
         remove_urls=True,
+        min_words_per_document=5,
+        min_df=0.005,
+        max_df=1.0,
+        min_chars=3,
+        remove_stopwords=True,
     )
 
 def newsgroups_pipeline(
@@ -200,13 +204,11 @@ def newsgroups_pipeline(
     if subset is not None:
         texts = texts[:subset]
     
-    top_n = None
-    delete_corpus(session, "newsgroups", if_exists=True)
     run_pipeline(
         session, 
         "newsgroups", 
         texts, 
-        top_n=top_n,
+        top_n=None,
         remove_urls=True,
         min_words_per_document=5,
         min_df=0.005,
@@ -295,15 +297,15 @@ if __name__ == '__main__':
     db_config = config.database
 
     with database.get_session(db_config) as session:
-        # twitter_financial_news_topic_pipeline(session, subset=1000)
+        twitter_financial_news_topic_pipeline(session)
         
         # Choose which preprocessing pipeline to use
-        use_octis = True
-        subset = None
+        # use_octis = False
+        # subset = None
         
-        if use_octis:
-            newsgroups_pipeline_octis(session, subset=subset)
-        else:
-            newsgroups_pipeline(session, subset=subset)
+        # if use_octis:
+        #     newsgroups_pipeline_octis(session, subset=subset)
+        # else:
+        #     newsgroups_pipeline(session, subset=subset)
 
 
