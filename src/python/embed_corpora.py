@@ -24,14 +24,17 @@ def embed_corpora():
             # Instantiate the embedder
             embedder = HFEmbedder()  # Adjust parameters if needed
 
-            # Embed the raw texts
-            embeddings = embedder.embed(raw_texts)  # Assuming this method returns a list of embeddings
+            # Embed the raw texts in batches
+            batch_size = 100
+            embeddings = []
+            for i in range(0, len(raw_texts), batch_size):
+                batch = raw_texts[i:i + batch_size]
+                embeddings.extend(embedder.embed(batch))  # Assuming this method returns a list of embeddings
 
             # Prepare data for bulk insert
-            embedding_data = [
-                dict(embedder_id=1, document_id=doc.id, vector=embedding.tolist())  # Assuming embedder_id is 1
-                for doc, embedding in zip(raw_documents, embeddings)
-            ]
+            embedding_data = []
+            for doc, embedding in zip(raw_documents, embeddings):
+                embedding_data.append(dict(embedder_id=1, document_id=doc.id, vector=embedding.tolist()))  # Assuming embedder_id is 1
 
             # Insert embeddings into the database
             pbar = tqdm.tqdm(total=len(embedding_data), desc=f"Storing embeddings for corpus '{corpus.name}'")
