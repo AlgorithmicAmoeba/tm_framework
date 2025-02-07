@@ -6,25 +6,27 @@ from sqlalchemy.sql import insert
 
 import database
 import configuration as cfg
-from models import Corpus, Document, Embedding
+from models import Corpus, Document, Embedding, DocumentType
 from hf_embedder import HFEmbedder  # Assuming HFEmbedder is the class for the embedder
 
 def embed_corpora():
     config = cfg.load_config_from_env()
     db_config = config.database
 
+
     with database.get_session(db_config) as session:
+        raw_type_id = session.query(DocumentType).filter_by(name='raw').first().id
         # Fetch all corpuses
         corpuses = session.query(Corpus).all()
         for corpus in corpuses:
             # Fetch raw documents for the corpus
-            raw_documents = session.query(Document).filter_by(corpus_id=corpus.id, type_id='raw').all()
+            raw_documents = session.query(Document).filter_by(corpus_id=corpus.id, type_id=raw_type_id).all()
             raw_texts = [doc.content for doc in raw_documents]
 
             # Instantiate the embedder
             embedder = HFEmbedder()  # Adjust parameters if needed
 
-            batch_size = 100  # Define batch size
+            batch_size = 32  # Define batch size
             # Embed the raw texts in batches with progress bar
             pbar_batches = tqdm.tqdm(total=len(raw_texts) // batch_size + (1 if len(raw_texts) % batch_size > 0 else 0), desc=f"Embedding texts for corpus '{corpus.name}'")
             embeddings = []
