@@ -24,9 +24,9 @@ def embed_corpora():
             # Instantiate the embedder
             embedder = HFEmbedder()  # Adjust parameters if needed
 
+            batch_size = 100  # Define batch size
             # Embed the raw texts in batches with progress bar
             pbar_batches = tqdm.tqdm(total=len(raw_texts) // batch_size + (1 if len(raw_texts) % batch_size > 0 else 0), desc=f"Embedding texts for corpus '{corpus.name}'")
-            batch_size = 100
             embeddings = []
             for i in range(0, len(raw_texts), batch_size):
                 batch = raw_texts[i:i + batch_size]
