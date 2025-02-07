@@ -30,7 +30,7 @@ def embed_corpora():
             # Initialize tiktoken for token counting
             tokenizer = tiktoken.encoding_for_model("text-embedding-ada-002")  # Use the appropriate model
 
-            batch_size = 32  # Define batch size
+            batch_size = 100  # Define a larger batch size for better efficiency
             # Embed the raw texts in batches with progress bar
             pbar_batches = tqdm.tqdm(total=len(raw_texts) // batch_size + (1 if len(raw_texts) % batch_size > 0 else 0), desc=f"Embedding texts for corpus '{corpus.name}'")
             embeddings = []
@@ -40,11 +40,16 @@ def embed_corpora():
                 total_tokens = sum(len(tokenizer.encode(text)) for text in batch)
                 cost_estimate = total_tokens * 0.0004  # Assuming $0.0004 per 1k tokens for the embedding model
 
-                # Get embeddings from OpenAI
+                # Get embeddings from OpenAI in batches
                 response = openai.Embedding.create(
                     input=batch,
-                    model="text-embedding-ada-002"  # Use the appropriate model
+                    model="text-embedding-ada-002",  # Use the appropriate model
+                    user="user_id"  # Optional: specify a user ID for tracking
                 )
+                # Handle potential API errors
+                if response.get("error"):
+                    warnings.warn(f"Error in embedding: {response['error']['message']}")
+                    continue
                 embeddings.extend([data['embedding'] for data in response['data']])
                 pbar_batches.update(1)
 
@@ -53,6 +58,7 @@ def embed_corpora():
             for doc, embedding in zip(raw_documents, embeddings):
                 embedding_data.append(dict(embedder_id=1, document_id=doc.id, vector=embedding))  # Assuming embedder_id is 1
                 print(f"Estimated cost for batch: ${cost_estimate:.6f}")  # Print cost estimate for the batch
+                pbar_batches.update(1)  # Update progress bar for batches
 
             # Insert embeddings into the database
             pbar = tqdm.tqdm(total=len(embedding_data), desc=f"Storing embeddings for corpus '{corpus.name}'")            
