@@ -1,19 +1,8 @@
-import warnings
-import tqdm
-import pandas as pd
-from sqlalchemy.orm import Session
-from sqlalchemy.sql import insert
-
-import database
-import configuration as cfg
-from models import Corpus, Document, Embedding, DocumentType
-import openai
-import tiktoken
+from batch_processor import BatchProcessor
 
 def embed_corpora():
     import configuration as cfg
     import openai
-    from batch_processor import BatchProcessor
 
     config = cfg.load_config_from_env()
     client = openai.Client(api_key=config.openai.api_key)
