@@ -11,61 +11,36 @@ import openai
 import tiktoken
 
 def embed_corpora():
+    import configuration as cfg
+    import openai
+    from batch_processor import BatchProcessor
+
     config = cfg.load_config_from_env()
-    db_config = config.database
+    client = openai.Client(api_key=config.openai.api_key)
 
+    processor = BatchProcessor(client, max_batch_size=49_990)
 
-    with database.get_session(db_config) as session:
-        raw_type_id = session.query(DocumentType).filter_by(name='raw').first().id
-        # Fetch all corpuses
-        corpuses = session.query(Corpus).all()
-        for corpus in corpuses:
-            # Fetch raw documents for the corpus
-            raw_documents = session.query(Document).filter_by(corpus_id=corpus.id, type_id=raw_type_id).all()
-            raw_texts = [doc.content for doc in raw_documents]
+    # Process the large batch file
+    # batches = processor.process_large_batch(
+    #     "ignore/processed_data/batch_embedding.jsonl",
+    #     "ignore/processed_data/batch_splits"
+    # )
 
-            # Initialize OpenAI API
-            openai.api_key = config.openai_api_key  # Assuming the API key is stored in the config
+    # Save batch tracking information
+    # processor.save_batch_info("ignore/processed_data/batch_tracking.json")
 
-            # Initialize tiktoken for token counting
-            tokenizer = tiktoken.encoding_for_model("text-embedding-ada-002")  # Use the appropriate model
+    # load batch tracking information
+    processor.load_batch_info("ignore/processed_data/batch_tracking.json")
 
-            batch_size = 100  # Define a larger batch size for better efficiency
-            # Embed the raw texts in batches with progress bar
-            pbar_batches = tqdm.tqdm(total=len(raw_texts) // batch_size + (1 if len(raw_texts) % batch_size > 0 else 0), desc=f"Embedding texts for corpus '{corpus.name}'")
-            embeddings = []
-            for i in range(0, len(raw_texts), batch_size):
-                batch = raw_texts[i:i + batch_size]
-                # Count tokens and estimate cost
-                total_tokens = sum(len(tokenizer.encode(text)) for text in batch)
-                cost_estimate = total_tokens * 0.0004  # Assuming $0.0004 per 1k tokens for the embedding model
+    # Check status of batches
+    # status = processor.check_batch_statuses()
+    # print("Batch processing status:", status)
 
-                # Get embeddings from OpenAI in batches
-                response = openai.Embedding.create(
-                    input=batch,
-                    model="text-embedding-ada-002",  # Use the appropriate model
-                    user="user_id"  # Optional: specify a user ID for tracking
-                )
-                # Handle potential API errors
-                if response.get("error"):
-                    warnings.warn(f"Error in embedding: {response['error']['message']}")
-                    continue
-                embeddings.extend([data['embedding'] for data in response['data']])
-                pbar_batches.update(1)
-
-            # Prepare data for bulk insert
-            embedding_data = []
-            for doc, embedding in zip(raw_documents, embeddings):
-                embedding_data.append(dict(embedder_id=1, document_id=doc.id, vector=embedding))  # Assuming embedder_id is 1
-                print(f"Estimated cost for batch: ${cost_estimate:.6f}")  # Print cost estimate for the batch
-                pbar_batches.update(1)  # Update progress bar for batches
-
-            # Insert embeddings into the database
-            pbar = tqdm.tqdm(total=len(embedding_data), desc=f"Storing embeddings for corpus '{corpus.name}'")            
-            session.execute(insert(Embedding), embedding_data)
-            session.commit()
-            pbar.update(len(embedding_data))
-            pbar.close()
+    results = processor.combine_batch_results(
+        "ignore/processed_data/batch_results",
+        "ignore/processed_data/combined_embeddings.json"
+    )
+    print("Results summary:", results)
 
 if __name__ == '__main__':
     embed_corpora()
