@@ -5,6 +5,7 @@ import os
 @dataclasses.dataclass
 class Config:
     database: "DatabaseConfig"
+    openai: "OpenAIConfig"
 
 
 @dataclasses.dataclass
@@ -18,6 +19,11 @@ class DatabaseConfig:
     def get_engine_string(self):
         res = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.db_name}"
         return res
+    
+
+@dataclasses.dataclass
+class OpenAIConfig:
+    api_key: str
 
 
 def load_config(path: str) -> Config:
@@ -28,7 +34,14 @@ def load_config(path: str) -> Config:
         **raw_config["database"]
     )
 
-    config = Config(database=database_config)
+    openai_config = OpenAIConfig(
+        **raw_config["openai"]
+    )
+
+    config = Config(
+        database=database_config,
+        openai=openai_config,
+    )
     
     return config
 
