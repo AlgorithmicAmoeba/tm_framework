@@ -248,6 +248,64 @@ def wikipedia_pipeline(
         remove_stopwords=True,
     )
 
+def imdb_pipeline(
+        session: Session,
+        subset: int = None,
+    ):
+    """Process IMDB movie reviews dataset."""
+    from datasets import load_dataset
+    
+    # Load both train and test splits
+    dataset = load_dataset("stanfordnlp/imdb")
+    train_texts = dataset['train']['text']
+    test_texts = dataset['test']['text']
+    texts = train_texts + test_texts
+    
+    if subset is not None:
+        texts = texts[:subset]
+    
+    run_pipeline(
+        session, 
+        "imdb_reviews", 
+        texts, 
+        top_n=None,
+        remove_urls=True,
+        min_words_per_document=10,
+        min_df=0.001,  # Lower threshold since reviews use diverse vocabulary
+        max_df=0.7,    # Stricter upper bound for common terms
+        min_chars=3,
+        remove_stopwords=True,
+    )
+
+def trec_pipeline(
+        session: Session,
+        subset: int = None,
+    ):
+    """Process TREC question classification dataset."""
+    from datasets import load_dataset
+    
+    # Load both train and test splits
+    dataset = load_dataset("CogComp/trec")
+    train_texts = dataset['train']['text']
+    test_texts = dataset['test']['text']
+    texts = train_texts + test_texts
+    
+    if subset is not None:
+        texts = texts[:subset]
+    
+    run_pipeline(
+        session, 
+        "trec_questions", 
+        texts, 
+        top_n=None,
+        remove_urls=True,
+        min_words_per_document=2,
+        min_df=0.0005,
+        max_df=0.9,
+        min_chars=3,
+        remove_stopwords=True,
+    )
+
 if __name__ == '__main__':
     import pandas as pd
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -258,9 +316,8 @@ if __name__ == '__main__':
     with database.get_session(db_config) as session:
         # twitter_financial_news_topic_pipeline(session)
         # newsgroups_pipeline(session)
-        wikipedia_pipeline(
-            session,
-            'ignore/raw_data/wikipedia_20k_sample.jsonl'
-        )
+        # wikipedia_pipeline(session, 'ignore/raw_data/wikipedia_20k_sample.jsonl')
+        # imdb_pipeline(session)
+        trec_pipeline(session)
 
 
