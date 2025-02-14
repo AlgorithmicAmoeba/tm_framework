@@ -1,5 +1,5 @@
 import concurrent.futures
-from preprocessing import UnicodeTokenizer, Vocabulariser
+from preprocessor import UnicodeTokenizer, Vocabulariser
 
 def test_tokenizer():
     tokenizer = UnicodeTokenizer()
