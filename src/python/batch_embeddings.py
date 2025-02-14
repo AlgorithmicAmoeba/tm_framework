@@ -284,8 +284,10 @@ def main():
 
     batch_processor = BatchProcessor(openai.Client())
 
-    batch_processor.submit_batches("ignore/batch_embeddings/request_files")
-    batch_processor.save_batch_info("ignore/batch_embeddings/batch_info.json")
+    # batch_processor.submit_batches("ignore/batch_embeddings/request_files")
+    # batch_processor.save_batch_info("ignore/batch_embeddings/batch_info.json")
+
+    batch_processor.load_batch_info("ignore/batch_embeddings/batch_info.json")
 
     print("Checking batch statuses")
     print(batch_processor.check_batch_statuses())
