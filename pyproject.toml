@@ -17,6 +17,7 @@ dependencies = [
     "datasets>=3.2.0",
     "openai>=1.61.1",
     "tiktoken>=0.8.0",
+    "fasttext>=0.9.3",
 ]
 
 [dependency-groups]
