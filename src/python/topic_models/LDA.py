@@ -54,12 +54,11 @@ if __name__ == '__main__':
     with database.get_session(db_config) as session:
         topics = run_lda_on_corpus(
             session,
-            corpus_name='trec_questions',
+            # corpus_name='trec_questions',
             # corpus_name='imdb_reviews',
-            # corpus_name="wikipedia_sample",
+            corpus_name="wikipedia_sample",
             # corpus_name='twitter-financial-news-topic-partial',
             # corpus_name='newsgroups',
-            # corpus_name='newsgroups-octis',
             num_topics=20,
         )
         for topic in topics:

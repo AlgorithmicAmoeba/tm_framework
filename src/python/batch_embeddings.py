@@ -2,6 +2,7 @@ import dataclasses
 import json
 import pathlib
 
+import openai
 import tqdm
 import tiktoken
 
@@ -151,6 +152,119 @@ def count_tokens_across_corpora(session) -> dict:
     return results
 
 
+@dataclasses.dataclass
+class BatchInfo:
+    batch_id: str
+    input_file: str
+    num_requests: int
+    status: str = "pending"
+
+class BatchProcessor:
+    def __init__(self, client: openai.Client):
+        self.client = client
+        self.batches: list[BatchInfo] = []
+
+    def submit_batch(self, input_file: str) -> BatchInfo:
+        """Submit a single batch file to OpenAI."""
+        batch_file = self.client.files.create(
+            file=open(input_file, "rb"),
+            purpose="batch"
+        )
+
+        batch_object = self.client.batches.create(
+            input_file_id=batch_file.id,
+            endpoint="/v1/embeddings",
+            completion_window="24h",
+            metadata={"source_file": input_file}
+        )
+
+        # Count number of requests in the batch file
+        with open(input_file, 'r') as f:
+            num_requests = sum(1 for _ in f)
+
+        batch_info = BatchInfo(
+            batch_id=batch_object.id,
+            input_file=input_file,
+            num_requests=num_requests
+        )
+        self.batches.append(batch_info)
+        return batch_info
+    
+    def check_batch_statuses(self, return_full=True) -> dict:
+        """Check the status of all submitted batches."""
+        status_summary = {"completed": 0, "processing": 0, "failed": 0}
+        batch_details = []
+        
+        for batch in self.batches:
+            try:
+                batch_status = self.client.batches.retrieve(batch.batch_id)
+                batch.status = batch_status.status
+                status_summary[batch_status.status] = status_summary.get(batch_status.status, 0) + 1
+                if return_full:
+                    batch_details.append(batch_status)
+            except Exception as e:
+                print(f"Error checking batch {batch.batch_id}: {e}")
+                
+        return batch_details if return_full else status_summary
+    
+    def save_batch_info(self, filepath: str):
+        """Save batch tracking information to a file."""
+        batch_data = [vars(batch) for batch in self.batches]
+        with open(filepath, 'w') as f:
+            json.dump(batch_data, f, indent=2)
+
+    def load_batch_info(self, filepath: str):
+        """Load batch tracking information from a file."""
+        with open(filepath, 'r') as f:
+            batch_data = json.load(f)
+        self.batches = [BatchInfo(**data) for data in batch_data]
+
+    def cancel_all_batches(self):
+        """Cancel all submitted batches."""
+        for batch in self.batches:
+            try:
+                self.client.batches.cancel(batch.batch_id)
+            except Exception as e:
+                print(f"Error cancelling batch {batch.batch_id}: {e}")
+
+    def download_batch_result(self, batch_info: BatchInfo, output_dir: str) -> str:
+        """Download the result file for a completed batch."""
+        batch_status = self.client.batches.retrieve(batch_info.batch_id)
+        if not batch_status.output_file_id:
+            raise ValueError(f"No output file found for batch {batch_info.batch_id}")
+
+        output_file = f"{output_dir}/result_{batch_info.batch_id}.jsonl"
+        
+        # Download the file content
+        file_response = self.client.files.content(batch_status.output_file_id)
+        
+        # Write content to file
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(file_response.text)
+            
+        return output_file
+    
+    def submit_batches(self, input_dir: str):
+        """Submit all batch files in a directory."""
+        input_dir = pathlib.Path(input_dir)
+        batch_files = []
+        for input_file in input_dir.glob('**/*.jsonl'):
+            if input_file.is_file():
+                batch_files.append(input_file)
+        
+        for input_file in tqdm.tqdm(batch_files, desc="Submitting batch files"):
+            self.submit_batch(str(input_file))
+
+    def download_all_results(self, output_dir: str):
+        """Download all completed batch results."""
+        output_dir = pathlib.Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        for batch in self.batches:
+            if batch.status == "completed":
+                self.download_batch_result(batch, output_dir)
+
+
 def main():
     import configuration as cfg
     import database
@@ -165,7 +279,17 @@ def main():
         #     print(f"{corpus} token count:", count)
 
         # Create batch files
-        create_batch_files_across_corpora(session, "ignore/batch_embeddings/request_files")
+        # create_batch_files_across_corpora(session, "ignore/batch_embeddings/request_files")
+        pass
+
+    batch_processor = BatchProcessor(openai.Client())
+
+    batch_processor.submit_batches("ignore/batch_embeddings/request_files")
+    batch_processor.save_batch_info("ignore/batch_embeddings/batch_info.json")
+
+    print("Checking batch statuses")
+    print(batch_processor.check_batch_statuses())
+
 
 
 if __name__ == "__main__":
