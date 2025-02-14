@@ -126,6 +126,7 @@ class VocabularyWordEmbedding(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     vocabulary_word_id = Column(Integer, ForeignKey('topic_modelling.vocabulary_word.id'))
     embedder_id = Column(Integer, ForeignKey('topic_modelling.embedder.id'))
+    vector = Column(ARRAY(Float))
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     
     vocabulary_word = relationship("VocabularyWord")

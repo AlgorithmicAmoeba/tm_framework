@@ -48,7 +48,8 @@ CREATE TABLE topic_modelling.embedder (
 INSERT INTO topic_modelling.embedder (name, description) VALUES 
     ('bow', 'Bag of Words'), 
     ('tfidf', 'Term Frequency-Inverse Document Frequency'), 
-    ('SBERT', 'Sentence-BERT');
+    ('openai_small', 'text-embedding-3-small'),
+    ('fasttext', 'FastText');
 
 CREATE TABLE topic_modelling.embedding (
     id SERIAL PRIMARY KEY,
