@@ -1,4 +1,5 @@
 import dataclasses
+import gzip
 import json
 import pathlib
 
@@ -227,22 +228,31 @@ class BatchProcessor:
             except Exception as e:
                 print(f"Error cancelling batch {batch.batch_id}: {e}")
 
-    def download_batch_result(self, batch_info: BatchInfo, output_dir: str) -> str:
+    def download_batch_result(self, batch_info: BatchInfo, output_dir: str):
         """Download the result file for a completed batch."""
-        batch_status = self.client.batches.retrieve(batch_info.batch_id)
-        if not batch_status.output_file_id:
-            raise ValueError(f"No output file found for batch {batch_info.batch_id}")
+        output_dir = pathlib.Path(output_dir)
 
-        output_file = f"{output_dir}/result_{batch_info.batch_id}.jsonl"
+        batch_status = self.client.batches.retrieve(batch_info.batch_id)
+        
+        input_file = batch_info.input_file
+        input_file_dir_name = pathlib.Path(input_file).parent.name
+
+        output_file = output_dir/input_file_dir_name/f"result_{batch_info.batch_id}.jsonl.gz"
+        
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         
         # Download the file content
         file_response = self.client.files.content(batch_status.output_file_id)
         
-        # Write content to file
-        with open(output_file, 'w', encoding='utf-8') as f:
+        # Write content to file using gzip
+        with gzip.open(output_file, 'wt', encoding='utf-8') as f:
             f.write(file_response.text)
             
-        return output_file
+        if batch_status.error_file_id is not None:
+            error_file = f"{output_dir}/error_{batch_info.batch_id}.jsonl.gz"
+            error_response = self.client.files.content(batch_status.error_file_id)
+            with gzip.open(error_file, 'wt', encoding='utf-8') as f:
+                f.write(error_response.text)
     
     def submit_batches(self, input_dir: str):
         """Submit all batch files in a directory."""
@@ -261,8 +271,7 @@ class BatchProcessor:
         output_dir.mkdir(parents=True, exist_ok=True)
         
         for batch in self.batches:
-            if batch.status == "completed":
-                self.download_batch_result(batch, output_dir)
+            self.download_batch_result(batch, output_dir)
 
 
 def main():
@@ -289,8 +298,11 @@ def main():
 
     batch_processor.load_batch_info("ignore/batch_embeddings/batch_info.json")
 
-    print("Checking batch statuses")
-    print(batch_processor.check_batch_statuses())
+    # print("Checking batch statuses")
+    # print(batch_processor.check_batch_statuses())
+
+    print("Downloading results")
+    batch_processor.download_all_results("ignore/batch_embeddings/results")
 
 
 
