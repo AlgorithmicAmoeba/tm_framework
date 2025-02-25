@@ -6,8 +6,10 @@ import pathlib
 import openai
 import tqdm
 import tiktoken
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Table, MetaData, text
 
-from models import Corpus, Document, DocumentType
+from models import Corpus, Document, DocumentType, Embedder, Embedding
 
 
 def count_tokens(strings: list[str]) -> int:
@@ -274,10 +276,209 @@ class BatchProcessor:
             self.download_batch_result(batch, output_dir)
 
 
+def load_result_vectors_into_db(session, results_dir: str, error_dir: str):
+    """Load result vectors into the database - optimized for performance."""
+    import concurrent.futures
+
+    results_dir = pathlib.Path(results_dir)
+    result_files = list(results_dir.glob('**/*.jsonl.gz'))
+    
+    # Get embedder_id once outside the loop
+    embedder_id = session.query(Embedder).filter_by(name='openai_small').first().id
+    docs_with_errors = []
+    
+    # Get metadata for direct table access
+    metadata = MetaData()
+    embedding_table = Table('embedding', metadata, schema='topic_modelling')
+    
+    def process_file(file_path):
+        file_errors = []
+        batch_size = 1000
+        embeddings_batch = []
+        
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            for line in f:
+                result = json.loads(line)
+                doc_id = int(result['custom_id'].split('-')[1])
+                
+                if result['response']['status_code'] != 200:
+                    file_errors.append(doc_id)
+                    continue
+
+                embedding = result['response']['body']['data'][0]["embedding"]
+                embeddings_batch.append({
+                    'document_id': doc_id,
+                    'embedder_id': embedder_id,
+                    'vector': embedding
+                })
+                
+                # Insert in batches to reduce overhead
+                if len(embeddings_batch) >= batch_size:
+                    _bulk_insert_embeddings(embeddings_batch)
+                    embeddings_batch = []
+            
+            # Insert any remaining embeddings
+            if embeddings_batch:
+                _bulk_insert_embeddings(embeddings_batch)
+                
+        return file_errors
+    
+    def _bulk_insert_embeddings(embeddings):
+        # Using PostgreSQL's INSERT ... ON CONFLICT for bulk upsert
+        stmt = insert(Embedding).values(embeddings)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["document_id", "embedder_id"],
+            set_={"vector": text("excluded.vector")}  # Use text() to reference excluded.vector
+        )
+        session.execute(stmt)
+    
+    # Process files in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_file = {executor.submit(process_file, file_path): file_path for file_path in result_files}
+        
+        for future in tqdm.tqdm(concurrent.futures.as_completed(future_to_file), total=len(result_files), desc="Processing files"):
+            file_path = future_to_file[future]
+            try:
+                file_errors = future.result()
+                if file_errors:
+                    docs_with_errors.extend(file_errors)
+            except Exception as exc:
+                print(f"{file_path} generated an exception: {exc}")
+    
+    # Save error IDs if any
+    if docs_with_errors:
+        error_file = pathlib.Path(error_dir) / "errors.json"
+        with open(error_file, 'w') as f:
+            json.dump(docs_with_errors, f, indent=2)
+
+def process_error_documents(session, error_file_path: str, client: openai.Client = None):
+    """
+    Process documents that failed during batch embedding by:
+    1. Reading the error JSON file
+    2. Retrieving affected documents
+    3. Shortening content to appropriate token length
+    4. Making live OpenAI embedding calls
+    5. Saving results to the database
+    
+    Args:
+        session: SQLAlchemy session
+        error_file_path: Path to the JSON file containing document IDs with errors
+        client: OpenAI client (if None, a new client will be created)
+    """
+    import time
+    
+    # Get OpenAI client if not provided
+    if client is None:
+        client = openai.Client()
+        
+    # Get embedder_id
+    embedder_id = session.query(Embedder).filter_by(name='openai_small').first().id
+    if not embedder_id:
+        print("Error: Could not find embedder 'openai_small'")
+        return
+        
+    # Read error document IDs
+    try:
+        with open(error_file_path, 'r') as f:
+            error_doc_ids = json.load(f)
+    except Exception as e:
+        print(f"Error reading error file: {e}")
+        return
+        
+    print(f"Processing {len(error_doc_ids)} documents with errors")
+    
+    # Retrieve documents
+    documents = session.query(Document).filter(Document.id.in_(error_doc_ids)).all()
+    doc_map = {doc.id: doc for doc in documents}
+    
+    # Create tokenizer for limiting text length
+    enc = tiktoken.encoding_for_model("text-embedding-3-small")
+    
+    # Define max token limit (8191 for text-embedding-3-small)
+    MAX_TOKENS = 8191
+    
+    # Function to shorten text to token limit
+    def shorten_text(text):
+        tokens = enc.encode(text)
+        if len(tokens) > MAX_TOKENS:
+            tokens = tokens[:MAX_TOKENS]
+            return enc.decode(tokens)
+        return text
+    
+    # Process documents in batches to avoid rate limits
+    batch_size = 100  # Adjust based on OpenAI rate limits
+    success_count = 0
+    failed_doc_ids = []
+    
+    for i in range(0, len(error_doc_ids), batch_size):
+        batch_doc_ids = error_doc_ids[i:i+batch_size]
+        print(f"Processing batch {i//batch_size + 1}/{(len(error_doc_ids) + batch_size - 1)//batch_size}")
+        
+        for doc_id in tqdm.tqdm(batch_doc_ids):
+            if doc_id not in doc_map:
+                print(f"Warning: Document ID {doc_id} not found in database")
+                failed_doc_ids.append(doc_id)
+                continue
+                
+            doc = doc_map[doc_id]
+            
+            # Shorten text to token limit
+            shortened_text = shorten_text(doc.content)
+            
+            # Make embedding request with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = client.embeddings.create(
+                        model="text-embedding-3-small",
+                        input=shortened_text
+                    )
+                    
+                    # Extract embedding vector
+                    embedding_vector = response.data[0].embedding
+                    
+                    # Check if embedding already exists
+                    existing = session.query(Embedding).filter_by(
+                        document_id=doc_id, 
+                        embedder_id=embedder_id
+                    ).first()
+                    
+                    if existing:
+                        # Update existing embedding
+                        existing.vector = embedding_vector
+                    else:
+                        # Create new embedding
+                        new_embedding = Embedding(
+                            document_id=doc_id,
+                            embedder_id=embedder_id,
+                            vector=embedding_vector
+                        )
+                        session.add(new_embedding)
+                    
+                    # Commit each embedding individually to prevent losing all work if one fails
+                    session.commit()
+                    success_count += 1
+                    break
+                except Exception as e:
+                    print(f"Error processing document {doc_id} (attempt {attempt+1}/{max_retries}): {e}")
+                    if attempt == max_retries - 1:
+                        failed_doc_ids.append(doc_id)
+                    else:
+                        # Exponential backoff
+                        time.sleep(2 ** attempt)
+        
+    # Save any remaining failed documents for future processing
+    if failed_doc_ids:
+        failed_file_path = error_file_path.replace('.json', '_still_failed.json')
+        with open(failed_file_path, 'w') as f:
+            json.dump(failed_doc_ids, f, indent=2)
+        print(f"Saved {len(failed_doc_ids)} still-failing document IDs to {failed_file_path}")
+    
+    print(f"Successfully processed {success_count}/{len(error_doc_ids)} documents")
+
 def main():
     import configuration as cfg
     import database
-
 
     config = cfg.load_config_from_env()
     db_config = config.database
@@ -289,20 +490,26 @@ def main():
 
         # Create batch files
         # create_batch_files_across_corpora(session, "ignore/batch_embeddings/request_files")
+        # load_result_vectors_into_db(session, "ignore/batch_embeddings/results", "ignore/batch_embeddings")
+        
+        # Process documents that had errors during batch embedding
+        process_error_documents(session, "ignore/batch_embeddings/errors.json")
+        
+        session.commit()
         pass
 
-    batch_processor = BatchProcessor(openai.Client())
+    # batch_processor = BatchProcessor(openai.Client())
 
     # batch_processor.submit_batches("ignore/batch_embeddings/request_files")
     # batch_processor.save_batch_info("ignore/batch_embeddings/batch_info.json")
 
-    batch_processor.load_batch_info("ignore/batch_embeddings/batch_info.json")
+    # batch_processor.load_batch_info("ignore/batch_embeddings/batch_info.json")
 
     # print("Checking batch statuses")
     # print(batch_processor.check_batch_statuses())
 
-    print("Downloading results")
-    batch_processor.download_all_results("ignore/batch_embeddings/results")
+    # print("Downloading results")
+    # batch_processor.download_all_results("ignore/batch_embeddings/results")
 
 
 
