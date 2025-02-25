@@ -100,13 +100,17 @@ class Embedder(Base):
 
 class Embedding(Base):
     __tablename__ = 'embedding'
-    __table_args__ = {"schema": "topic_modelling"}
+    __table_args__ = {
+        "schema": "topic_modelling",
+    }
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     embedder_id = Column(Integer, ForeignKey('topic_modelling.embedder.id'))
     document_id = Column(Integer, ForeignKey('topic_modelling.document.id'))
     vector = Column(ARRAY(Float))
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+
+    UniqueConstraint('embedder_id', 'document_id', name='uix_embedder_document')
     
     embedder = relationship("Embedder")
     document = relationship("Document")

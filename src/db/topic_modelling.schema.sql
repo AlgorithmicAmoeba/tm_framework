@@ -59,6 +59,8 @@ CREATE TABLE topic_modelling.embedding (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+ADD CONSTRAINT uix_embedding_document_embedder UNIQUE (document_id, embedder_id);
+
 CREATE TABLE topic_modelling.vocabulary_word_embedding (
     id SERIAL PRIMARY KEY,
     vocabulary_word_id INTEGER REFERENCES topic_modelling.vocabulary_word(id),
