@@ -6,7 +6,10 @@ from sqlalchemy.sql.expression import insert
 import tqdm
 
 from preprocessor import TextPreprocessor
-from models import Corpus, Document, VocabularyWord, Embedder, Embedding, DocumentType
+from models import (
+    Corpus, Document, VocabularyWord, Embedder, Embedding,
+    DocumentType, TopicModelCorpusResult, ResultPerformance
+)
 import database
 import configuration as cfg
 
@@ -156,13 +159,18 @@ def delete_corpus(session: Session, corpus_name: str, if_exists: bool = False):
             return
         raise ValueError(f"Corpus '{corpus_name}' not found")
     
-    # Remove embeddings, documents, vocabulary words
+    # Remove embeddings, documents, vocabulary words, TopicModelCorpusResults
     # Remove embeddings by document
+    # Remove ResultPerformance by TopicModelCorpusResult
     session.query(Embedding).filter(Embedding.document_id.in_(
         session.query(Document.id).filter_by(corpus_id=corpus.id)
     )).delete(synchronize_session=False)
     session.query(Document).filter_by(corpus_id=corpus.id).delete()
     session.query(VocabularyWord).filter_by(corpus_id=corpus.id).delete()
+    session.query(ResultPerformance).filter(ResultPerformance.topic_model_corpus_result_id.in_(
+        session.query(TopicModelCorpusResult.id).filter_by(corpus_id=corpus.id)
+    )).delete(synchronize_session=False)
+    session.query(TopicModelCorpusResult).filter_by(corpus_id=corpus.id).delete()
     session.query(Corpus).filter_by(id=corpus.id).delete()
     session.commit()
 
