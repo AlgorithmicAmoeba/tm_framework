@@ -1,14 +1,28 @@
+import numpy as np
+import scipy.sparse
 from turftopic import AutoEncodingTopicModel
 
 from corpus import Corpus
+
+
+def embedding_list_to_array(embeddings: list):
+    return np.array([
+        embedding.vector
+        for embedding in embeddings
+    ])
 
 
 class CustomVectorizer:
     def __init__(self, corpus: Corpus):
         self.corpus = corpus
     
-    def fit_transform(self):
-        return self.corpus.get_document_vectors('tfidf')
+    def fit_transform(self, *args, **kwargs) -> 'scipy.sparse.csr_matrix':
+        embeddings = self.corpus.get_document_vectors('tfidf')
+        embeddings = embedding_list_to_array(embeddings)
+
+        # convert to sparse matrix
+        embeddings = scipy.sparse.csr_matrix(embeddings)
+        return embeddings
 
 
 
@@ -25,9 +39,18 @@ class ZeroShotTM:
         )
 
     def train(self):
+        embeddings = self.corpus.get_document_vectors('openai_small')
+        embeddings = embedding_list_to_array(embeddings)
+
+        raw_documents = self.corpus.get_raw_documents()
+        raw_documents = [
+            document.content
+            for document in raw_documents
+        ]
+
         self.model.fit(
-            raw_documents=self.corpus.get_raw_documents(),
-            embeddings=self.corpus.get_document_vectors('openai_small'),
+            raw_documents=raw_documents,
+            embeddings=embeddings,
         )
 
     def get_topics(self):
