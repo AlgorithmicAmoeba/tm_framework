@@ -147,7 +147,6 @@ def run_pipeline(
         remove_urls=remove_urls,
         remove_stopwords=remove_stopwords,
     )
-    delete_corpus(session, "newsgroups-octis", if_exists=True)
     store_in_database(session, corpus_name, corpus_processing)
 
 
