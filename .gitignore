@@ -1,6 +1,8 @@
 .vscode
 ignore/
 
+CLAUDE.md
+
 ## From github
 # Byte-compiled / optimized / DLL files
 __pycache__/
