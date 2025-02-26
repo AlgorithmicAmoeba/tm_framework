@@ -46,8 +46,10 @@ class Corpus:
             self.session.query(Embedding)
             .join(Embedding.document)
             .join(Embedding.embedder)
+            .join(Document.document_type)
             .filter(Document.corpus_id == self.corpus.id)
             .filter(Embedder.name == embedder_name)
+            .filter(DocumentType.name == 'raw')
             .all()
         )
 
