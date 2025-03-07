@@ -8,7 +8,8 @@ import tqdm
 from preprocessor import TextPreprocessor
 from models import (
     Corpus, Document, VocabularyWord, Embedder, Embedding,
-    DocumentType, TopicModelCorpusResult, ResultPerformance
+    DocumentType, TopicModelCorpusResult, ResultPerformance,
+    VocabularyWordEmbedding
 )
 import database
 import configuration as cfg
@@ -20,6 +21,19 @@ class CorpusProcessing:
         self.transformed_texts = transformed_texts
         self.vocabulary = vocabulary
         self.tfidf_matrix = tfidf_matrix
+
+        # warn if the shapes don't match
+        if len(self.raw_texts) != len(self.tokenized_texts):
+            warnings.warn("Number of raw texts and tokenized texts do not match")
+
+        if len(self.raw_texts) != len(self.transformed_texts):
+            warnings.warn("Number of raw texts and transformed texts do not match")
+
+        if len(self.raw_texts) != self.tfidf_matrix.shape[0]:
+            warnings.warn("Number of raw texts and tfidf vectors do not match")
+
+        if len(self.vocabulary) != self.tfidf_matrix.shape[1]:
+            warnings.warn("Vocabulary length does not match tfidf matrix shape")
 
 def preprocess_texts(
         texts,
@@ -44,7 +58,7 @@ def preprocess_texts(
     transformed_texts = preprocessor.fit_transform(texts)
 
     return CorpusProcessing(
-        raw_texts=texts,
+        raw_texts=preprocessor.raw_texts,
         tokenized_texts=preprocessor.tokenized_texts,
         transformed_texts=transformed_texts,
         vocabulary=preprocessor.vocabulary,
@@ -147,6 +161,7 @@ def run_pipeline(
         remove_urls=remove_urls,
         remove_stopwords=remove_stopwords,
     )
+    delete_corpus(session, corpus_name, if_exists=True)
     store_in_database(session, corpus_name, corpus_processing)
 
 
@@ -165,6 +180,10 @@ def delete_corpus(session: Session, corpus_name: str, if_exists: bool = False):
         session.query(Document.id).filter_by(corpus_id=corpus.id)
     )).delete(synchronize_session=False)
     session.query(Document).filter_by(corpus_id=corpus.id).delete()
+    # Delete vocabulary word embeddings
+    session.query(VocabularyWordEmbedding).filter(VocabularyWordEmbedding.vocabulary_word_id.in_(
+        session.query(VocabularyWord.id).filter_by(corpus_id=corpus.id)
+    )).delete(synchronize_session=False)
     session.query(VocabularyWord).filter_by(corpus_id=corpus.id).delete()
     session.query(ResultPerformance).filter(ResultPerformance.topic_model_corpus_result_id.in_(
         session.query(TopicModelCorpusResult.id).filter_by(corpus_id=corpus.id)
@@ -189,7 +208,7 @@ def twitter_financial_news_topic_pipeline(session: Session, subset: int = None):
         top_n=None,
         remove_urls=True,
         min_words_per_document=5,
-        min_df=0.005,
+        min_df=0.001,
         max_df=1.0,
         min_chars=3,
         remove_stopwords=True,
@@ -278,7 +297,7 @@ def imdb_pipeline(
         top_n=None,
         remove_urls=True,
         min_words_per_document=10,
-        min_df=0.001,  # Lower threshold since reviews use diverse vocabulary
+        min_df=0.003,  # Lower threshold since reviews use diverse vocabulary
         max_df=0.7,    # Stricter upper bound for common terms
         min_chars=3,
         remove_stopwords=True,
@@ -323,8 +342,8 @@ if __name__ == '__main__':
     with database.get_session(db_config) as session:
         # twitter_financial_news_topic_pipeline(session)
         newsgroups_pipeline(session)
-        # wikipedia_pipeline(session, 'ignore/raw_data/wikipedia_20k_sample.jsonl')
-        # imdb_pipeline(session)
-        # trec_pipeline(session)
+        wikipedia_pipeline(session, 'ignore/raw_data/wikipedia_20k_sample.jsonl')
+        imdb_pipeline(session)
+        trec_pipeline(session)
 
 

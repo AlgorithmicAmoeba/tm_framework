@@ -60,7 +60,9 @@ class TextPreprocessor:
         self._vocabulary_scores = None
         self._tfidf_matrix = None
 
-        self._cleaned_texts = None
+        self.cleaned_texts = None
+
+        self.raw_texts = None
 
         # Load spacy model if needed
         if remove_stopwords or lemmatize:
@@ -81,8 +83,10 @@ class TextPreprocessor:
     def fit_transform(self, texts: list[str]) -> list[list[str]]:
         """Process texts and build vocabulary."""
 
+        self.raw_texts = texts
+
         cleaned_texts = self.clean_texts(texts)
-        self._cleaned_texts = cleaned_texts
+        self.cleaned_texts = cleaned_texts
 
         tokenized_texts = [text.split(' ') for text in cleaned_texts]
         # Calculate initial vocabulary size
@@ -112,9 +116,16 @@ class TextPreprocessor:
         if self._min_words_per_document:
             text_lens = [len(tokens) for tokens in filtered_texts]
             min_words_threshold_mask = [text_len >= self._min_words_per_document for text_len in text_lens]
-            filtered_texts = [filtered_texts[i] for i, mask in enumerate(min_words_threshold_mask) if mask]
+            
+            # Keep track of which documents are filtered out
+            filtered_indices = [i for i, mask in enumerate(min_words_threshold_mask) if mask]
+            
+            # Filter all data structures consistently
+            filtered_texts = [filtered_texts[i] for i in filtered_indices]
             self._tfidf_matrix = self._tfidf_matrix[min_words_threshold_mask]
-
+            self.cleaned_texts = [self.cleaned_texts[i] for i in filtered_indices]
+            self.raw_texts = [self.raw_texts[i] for i in filtered_indices]
+            
             print(f"Filtered documents from {len(tokenized_texts)} to {len(filtered_texts)}")
 
         return filtered_texts
@@ -221,4 +232,4 @@ class TextPreprocessor:
     @property
     def tokenized_texts(self) -> list[list[str]]:
         """Get the tokenized texts."""
-        return [text.split(' ') for text in self._cleaned_texts]
+        return [text.split(' ') for text in self.cleaned_texts]
