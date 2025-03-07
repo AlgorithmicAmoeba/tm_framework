@@ -129,8 +129,9 @@ def create_batch_files_across_corpora(
 
         print(f"Corpus {corpus.name} has {corpus_tokens} tokens")
 
+        # Use simpler custom_id format that matches the format from observed results
         documents = [
-            (f"doc-{chunk.doc_id}-chunk-{chunk.chunk_from}-{chunk.chunk_to}", chunk.content)
+            (f"doc-{chunk.doc_id}-chunk-{chunk.chunk_from}", chunk.content)
             for chunk in chunks
         ]
         
@@ -476,6 +477,246 @@ def process_error_documents(session, error_file_path: str, client: openai.Client
     
     print(f"Successfully processed {success_count}/{len(error_doc_ids)} documents")
 
+def hash_input_from_request_files(input_dir: str, results_dir: str, output_dir: str):
+    """
+    Read request files and result files to create a mapping of input hashes to embeddings,
+    with separate files for each corpus.
+    
+    Args:
+        input_dir: Directory containing request files organized by corpus
+        results_dir: Directory containing result files organized by corpus
+        output_dir: Directory to write the output JSONL.GZ files (one per corpus)
+    """
+    import hashlib
+    
+    input_dir = pathlib.Path(input_dir)
+    results_dir = pathlib.Path(results_dir)
+    output_dir = pathlib.Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Get all corpus subdirectories in the input directory
+    corpus_dirs = [d for d in input_dir.iterdir() if d.is_dir()]
+    
+    for corpus_dir in tqdm.tqdm(corpus_dirs, desc="Processing corpora"):
+        corpus_name = corpus_dir.name
+        output_path = output_dir / f"{corpus_name}_hash_embedding_mapping.jsonl.gz"
+        
+        # Build mapping from document_id to hash for this corpus
+        doc_id_to_hash = {}
+        
+        # Process request files for this corpus
+        request_files = list(corpus_dir.glob('*.jsonl'))
+        for file_path in tqdm.tqdm(request_files, desc=f"Processing requests for {corpus_name}"):
+            with open(file_path, 'r') as f:
+                for line in f:
+                    request = json.loads(line)
+                    input_text = request['body']['input']
+                    custom_id = request['custom_id']
+                    
+                    # Extract document_id from custom_id
+                    parts = custom_id.split('-')
+                    if len(parts) >= 2:
+                        doc_id = int(parts[1])
+                    else:
+                        print(f"Warning: Could not parse document ID from custom_id {custom_id}")
+                        continue
+                    
+                    # Calculate hash of input text
+                    input_hash = hashlib.md5(input_text.encode('utf-8')).hexdigest()
+                    
+                    # Store mapping
+                    doc_id_to_hash[doc_id] = input_hash
+        
+        print(f"Processed {len(doc_id_to_hash)} unique requests for corpus {corpus_name}")
+        
+        # Find result files for this corpus
+        result_dir = results_dir / corpus_name
+        if not result_dir.exists():
+            print(f"No results directory found for corpus {corpus_name}")
+            continue
+            
+        result_files = list(result_dir.glob('*.jsonl.gz'))
+        if not result_files:
+            print(f"No result files found for corpus {corpus_name}")
+            continue
+        
+        # Process result files to match embeddings with hashes
+        with gzip.open(output_path, 'wt', encoding='utf-8') as output_file:
+            total_mappings = 0
+            
+            for file_path in tqdm.tqdm(result_files, desc=f"Processing results for {corpus_name}"):
+                with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                    for line in f:
+                        result = json.loads(line)
+                        
+                        # Skip failed requests
+                        if result['response']['status_code'] != 200:
+                            continue
+                        
+                        # Get the custom ID
+                        custom_id = result['custom_id']
+                        doc_id = int(custom_id.split('-')[1])
+                        
+                        # Skip if not in our mapping
+                        if doc_id not in doc_id_to_hash:
+                            continue
+                            
+                        embedding = result['response']['body']['data'][0]["embedding"]
+                        hash_code = doc_id_to_hash[doc_id]
+                        
+                        # Write directly to output file
+                        record = {'input_hash': hash_code, 'embedding': embedding}
+                        output_file.write(json.dumps(record) + '\n')
+                        total_mappings += 1
+        
+        print(f"Wrote {total_mappings} hash-to-embedding mappings for corpus {corpus_name} to {output_path}")
+
+def match_embeddings_for_documents(session, hash_embedding_dir: str, client: openai.Client = None):
+    """
+    Match documents in database with embeddings from the hash-to-embedding mapping files.
+    Process one corpus at a time to optimize memory usage.
+    
+    Args:
+        session: SQLAlchemy session
+        hash_embedding_dir: Directory containing hash-to-embedding mapping files by corpus
+    """
+    import hashlib
+    
+    hash_embedding_dir = pathlib.Path(hash_embedding_dir)
+    
+    # Get embedder_id for the model
+    embedder_id = session.query(Embedder).filter_by(name='openai_small').first().id
+    
+    # Tokenizer for text processing
+    enc = tiktoken.encoding_for_model("text-embedding-3-small")
+    MAX_TOKENS = 8191  # Max tokens for text-embedding-3-small
+    
+    # Get all corpus files
+    mapping_files = list(hash_embedding_dir.glob("*_hash_embedding_mapping.jsonl.gz"))
+    
+    if not mapping_files:
+        print(f"No hash mapping files found in {hash_embedding_dir}")
+        return
+    
+    total_matched = 0
+    total_unmatched = 0
+    total_openai_calls = 0
+    
+    for mapping_file in tqdm.tqdm(mapping_files, desc="Processing corpora"):
+        corpus_name = mapping_file.name.split('_hash_embedding_mapping')[0]
+        print(f"Processing corpus: {corpus_name}")
+        
+        # Get corpus ID from name
+        corpus = session.query(Corpus).filter_by(name=corpus_name).first()
+        if not corpus:
+            print(f"Warning: No corpus found with name '{corpus_name}', skipping")
+            continue
+        
+        # Load hash-to-embedding mapping for this corpus
+        hash_to_embedding = {}
+        with gzip.open(mapping_file, 'rt', encoding='utf-8') as f:
+            for line in f:
+                item = json.loads(line)
+                hash_to_embedding[item['input_hash']] = item['embedding']
+        
+        print(f"Loaded {len(hash_to_embedding)} hash-to-embedding mappings for corpus {corpus_name}")
+        
+        # Get all documents from this corpus that are raw documents
+        raw_document_type_id = session.query(DocumentType).filter_by(name='raw').first().id
+        documents = session.query(Document).filter_by(corpus_id=corpus.id, type_id=raw_document_type_id).all()
+        print(f"Found {len(documents)} documents in corpus {corpus_name}")
+        
+        # Lists to track progress
+        corpus_unmatched = []
+        corpus_matched = 0
+        openai_calls = 0
+        
+        # Process documents in batches
+        batch_size = 1000
+        embeddings_batch = []
+        
+        for doc in tqdm.tqdm(documents, desc=f"Processing documents in {corpus_name}"):
+            # Truncate document text to max token limit
+            tokens = enc.encode(doc.content)
+            if len(tokens) > MAX_TOKENS:
+                tokens = tokens[:MAX_TOKENS]
+            
+            # Recreate the same text that was used in the embedding request
+            truncated_text = enc.decode(tokens)
+            input_hash = hashlib.md5(truncated_text.encode('utf-8')).hexdigest()
+            
+            # Check if we have an embedding for this hash
+            if input_hash in hash_to_embedding:
+                embedding_vector = hash_to_embedding[input_hash]
+                
+                embeddings_batch.append({
+                    'document_id': doc.id,
+                    'embedder_id': embedder_id,
+                    'vector': embedding_vector
+                })
+                
+                corpus_matched += 1
+            elif client is not None:
+                # Make a live OpenAI embedding call
+                response = client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=truncated_text
+                )
+                
+                embedding_vector = response.data[0].embedding
+                
+                embeddings_batch.append({
+                    'document_id': doc.id,
+                    'embedder_id': embedder_id,
+                    'vector': embedding_vector
+                })
+                
+                corpus_matched += 1
+                openai_calls += 1
+            else:
+                corpus_unmatched.append(doc.id)
+            
+            # Insert in batches
+            if len(embeddings_batch) >= batch_size:
+                _bulk_insert_embeddings(session, embeddings_batch)
+                embeddings_batch = []
+        
+        # Insert any remaining embeddings
+        if embeddings_batch:
+            _bulk_insert_embeddings(session, embeddings_batch)
+        
+        print(f"Matched {corpus_matched} documents with embeddings in corpus {corpus_name}")
+        print(f"Could not match {len(corpus_unmatched)} documents in corpus {corpus_name}")
+        if openai_calls:
+            print(f"Made {openai_calls} live OpenAI embedding calls")
+        
+        # Save unmatched document IDs for this corpus
+        if corpus_unmatched:
+            with open(f'unmatched_documents_{corpus_name}.json', 'w') as f:
+                json.dump(corpus_unmatched, f, indent=2)
+        
+        total_matched += corpus_matched
+        total_unmatched += len(corpus_unmatched)
+        total_openai_calls += openai_calls
+        
+        # Clear hash_to_embedding to free memory before processing next corpus
+        hash_to_embedding.clear()
+    
+    print(f"Total matched: {total_matched}, Total unmatched: {total_unmatched}")
+    if total_openai_calls:
+        print(f"Total live OpenAI embedding calls: {total_openai_calls}")
+
+def _bulk_insert_embeddings(session, embeddings):
+    """Helper function to bulk insert embeddings with conflict handling."""
+    # Using PostgreSQL's INSERT ... ON CONFLICT for bulk upsert
+    stmt = insert(Embedding).values(embeddings)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["document_id", "embedder_id"],
+        set_={"vector": text("excluded.vector")}
+    )
+    session.execute(stmt)
+    session.commit()
+
 def main():
     import configuration as cfg
     import database
@@ -484,32 +725,40 @@ def main():
     db_config = config.database
 
     with database.get_session(db_config) as session:
-        # counts = count_tokens_across_corpora(session)
-        # for corpus, count in counts.items():
-        #     print(f"{corpus} token count:", count)
-
-        # Create batch files
-        # create_batch_files_across_corpora(session, "ignore/batch_embeddings/request_files")
-        # load_result_vectors_into_db(session, "ignore/batch_embeddings/results", "ignore/batch_embeddings")
+        # Step 1: Create hash mapping from request files and link with embeddings from results
+        # hash_input_from_request_files(
+        #     "ignore/batch_embeddings/request_files",
+        #     "ignore/batch_embeddings/results",
+        #     "ignore/batch_embeddings/hash_embedding_mapping.jsonl.gz"
+        # )
         
-        # Process documents that had errors during batch embedding
-        process_error_documents(session, "ignore/batch_embeddings/errors.json")
+        # Step 2: Match documents with embeddings using the mapping
+        # match_embeddings_for_documents(
+        #     session,
+        #     "ignore/batch_embeddings/hash_embedding_mapping.jsonl.gz"
+        # )
+        
+        # Optional: Process documents that couldn't be matched
+        # process_error_documents(session, "unmatched_documents.json")
+        
+        # Generate batch files if needed
+        # create_batch_files_across_corpora(session, "ignore/batch_embeddings/request_files")
+        
+        # For batch submission and downloading (uncomment as needed)
+        # batch_processor = BatchProcessor(openai.Client())
+        # batch_processor.submit_batches("ignore/batch_embeddings/request_files")
+        # batch_processor.save_batch_info("ignore/batch_embeddings/batch_info.json")
+        # batch_processor.load_batch_info("ignore/batch_embeddings/batch_info.json")
+        # batch_processor.download_all_results("ignore/batch_embeddings/results")
+
+        # create hash files
+        # hash_input_from_request_files("ignore/batch_embeddings/request_files", "ignore/batch_embeddings/results", "ignore/batch_embeddings/hash_embedding_mapping.jsonl.gz")
+
+        # match embeddings
+        client = openai.Client()
+        match_embeddings_for_documents(session, "ignore/batch_embeddings/hash_embedding_mapping.jsonl.gz", client)
         
         session.commit()
-        pass
-
-    # batch_processor = BatchProcessor(openai.Client())
-
-    # batch_processor.submit_batches("ignore/batch_embeddings/request_files")
-    # batch_processor.save_batch_info("ignore/batch_embeddings/batch_info.json")
-
-    # batch_processor.load_batch_info("ignore/batch_embeddings/batch_info.json")
-
-    # print("Checking batch statuses")
-    # print(batch_processor.check_batch_statuses())
-
-    # print("Downloading results")
-    # batch_processor.download_all_results("ignore/batch_embeddings/results")
 
 
 
