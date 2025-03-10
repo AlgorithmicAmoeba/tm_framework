@@ -17,6 +17,7 @@ class Corpus:
             .join(Document.document_type)
             .filter(Document.corpus_id == self.corpus.id)
             .filter(DocumentType.name == 'raw')
+            .order_by(Document.id)
             .all()
         )
     
@@ -27,6 +28,7 @@ class Corpus:
             .join(Document.document_type)
             .filter(Document.corpus_id == self.corpus.id)
             .filter(DocumentType.name == 'preprocessed')
+            
             .all()
         )
     
