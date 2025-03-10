@@ -72,8 +72,8 @@ if __name__ == '__main__':
     with database.get_session(db_config) as session:
         topics = run_bertopic_on_corpus(
             session,
-            # corpus_name="wikipedia_sample",
-            corpus_name='newsgroups',
+            corpus_name="wikipedia_sample",
+            # corpus_name='newsgroups',
             # corpus_name='twitter-financial-news-topic-partial',
             num_topics=20,
         )
