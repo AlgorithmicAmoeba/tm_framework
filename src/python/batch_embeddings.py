@@ -1,15 +1,18 @@
 import dataclasses
 import gzip
+import hashlib
 import json
 import pathlib
+from typing import Dict, List, Optional, Set, Tuple
 
 import openai
 import tqdm
 import tiktoken
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import Table, MetaData, text
+from sqlalchemy import text
 
 from models import Corpus, Document, DocumentType, Embedder, Embedding
+from db_document_store import DocStore
 
 
 def count_tokens(strings: list[str]) -> int:
@@ -79,7 +82,6 @@ class Chunk:
 def chunk_documents(
     documents: list[Document],
     chunk_size: int,
-    # stride_length: int,
 ) -> list[Chunk]:
     """Chunk documents into smaller pieces. Using tiktoken for tokenization."""
     enc = tiktoken.encoding_for_model("gpt-4o")
@@ -103,43 +105,120 @@ def chunk_documents(
     return chunks
 
 
+def get_existing_embeddings(duckdb_path: str, embedder_name: str = "openai_small") -> Set[int]:
+    """
+    Get document IDs that already have embeddings in the DuckDB database.
+    
+    Args:
+        duckdb_path: Path to the DuckDB database
+        embedder_name: Name of the embedder
+        
+    Returns:
+        Set of document IDs with existing embeddings
+    """
+    try:
+        with DocStore(duckdb_path) as doc_store:
+            # Use a custom query to get just the document IDs
+            result = doc_store.run_query("SELECT id FROM document")
+            return {row[0] for row in result}
+    except Exception as e:
+        print(f"Warning: Could not retrieve existing embeddings from DuckDB: {e}")
+        return set()
+
+
 def create_batch_files_across_corpora(
         session,
-        output_dir: str
-    ):
-    """Create batch files for each corpus and return mapping of corpus name to file path."""
+        output_dir: str,
+        duckdb_path: Optional[str] = None
+    ) -> Dict[str, List[Tuple[int, str]]]:
+    """
+    Create batch files for each corpus and return mapping of corpus name to documents.
+    
+    Args:
+        session: SQLAlchemy session
+        output_dir: Output directory for batch files
+        duckdb_path: Optional path to DuckDB database to check for existing embeddings
+        
+    Returns:
+        Dictionary mapping corpus names to lists of (doc_id, content) tuples
+    """
     output_path = pathlib.Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
     corpora = session.query(Corpus).all()
+    
+    # Get set of document IDs that already have embeddings in DuckDB
+    existing_embeddings = set()
+    if duckdb_path:
+        existing_embeddings = get_existing_embeddings(duckdb_path)
+        print(f"Found {len(existing_embeddings)} documents with existing embeddings in DuckDB")
 
+    # Get the embedder ID
+    embedder = session.query(Embedder).filter_by(name='openai_small').first()
+    if not embedder:
+        raise ValueError("Embedder 'openai_small' not found in the database")
+    
+    # Get existing embeddings in main database
+    existing_embedding_doc_ids = {
+        doc_id for (doc_id,) in session.query(Embedding.document_id).filter_by(embedder_id=embedder.id).all()
+    }
+    print(f"Found {len(existing_embedding_doc_ids)} documents with existing embeddings in main database")
+    
+    # Combine both sets of existing embeddings
+    all_existing_embeddings = existing_embeddings.union(existing_embedding_doc_ids)
+    print(f"Total {len(all_existing_embeddings)} unique documents already have embeddings")
+    
+    # Store documents that need direct DB transfer
+    direct_to_db_documents = {}
 
     total_tokens = 0
+    total_processed = 0
+    total_skipped = 0
+    
     for corpus in tqdm.tqdm(corpora, desc="Creating batch files for corpora"):
-        documents = session.query(Document).filter_by(corpus_id=corpus.id).all()
-
+        # Get raw documents
+        raw_document_type_id = session.query(DocumentType).filter_by(name='raw').first().id
+        documents = session.query(Document).filter_by(corpus_id=corpus.id, type_id=raw_document_type_id).all()
+        
+        # Apply chunking
         chunks = chunk_documents(
             documents,
-            chunk_size=8191, 
-            # stride_length=1024,
+            chunk_size=8191,
         )
-
+        
         corpus_tokens = sum(chunk.num_tokens for chunk in chunks)
         total_tokens += corpus_tokens
-
-        print(f"Corpus {corpus.name} has {corpus_tokens} tokens")
-
-        # Use simpler custom_id format that matches the format from observed results
-        documents = [
-            (f"doc-{chunk.doc_id}-chunk-{chunk.chunk_from}", chunk.content)
-            for chunk in chunks
-        ]
         
-        create_batch_embedding_file(documents, output_path / f"{corpus.name}")
-
+        print(f"Corpus {corpus.name} has {len(chunks)} documents and {corpus_tokens} tokens")
+        
+        # Separate documents that already have embeddings
+        batch_documents = []
+        direct_documents = []
+        
+        for chunk in chunks:
+            doc_id = chunk.doc_id
+            
+            if doc_id in all_existing_embeddings:
+                # Document already has an embedding, skip batch processing
+                total_skipped += 1
+                if corpus.name not in direct_to_db_documents:
+                    direct_to_db_documents[corpus.name] = []
+                direct_documents.append((doc_id, chunk.content))
+            else:
+                # Document needs embedding, add to batch
+                total_processed += 1
+                batch_documents.append((f"doc-{doc_id}-chunk-{chunk.chunk_from}", chunk.content))
+        
+        # Create batch file if we have documents to process
+        if batch_documents:
+            create_batch_embedding_file(batch_documents, output_path / f"{corpus.name}")
+        
     print(f"Total tokens: {total_tokens}")
-        
+    print(f"Documents to process: {total_processed}")
+    print(f"Documents already processed: {total_skipped}")
     
+    return direct_to_db_documents
+
 
 def count_tokens_across_corpora(session) -> dict:
     """Count tokens in all corpora and return a dictionary with results."""
@@ -277,8 +356,80 @@ class BatchProcessor:
             self.download_batch_result(batch, output_dir)
 
 
-def load_result_vectors_into_db(session, results_dir: str, error_dir: str):
-    """Load result vectors into the database - optimized for performance."""
+def process_direct_to_db_documents(
+    session, 
+    direct_documents: Dict[str, List[Tuple[int, str]]], 
+    duckdb_path: str,
+    embedder_name: str = "openai_small"
+):
+    """
+    Process documents that already have embeddings in DuckDB and 
+    transfer them directly to the main database.
+    
+    Args:
+        session: SQLAlchemy session
+        direct_documents: Dictionary mapping corpus names to document lists
+        duckdb_path: Path to the DuckDB database
+        embedder_name: Name of the embedder to use
+    """
+    embedder = session.query(Embedder).filter_by(name=embedder_name).first()
+    if not embedder:
+        raise ValueError(f"Embedder '{embedder_name}' not found in the database")
+    
+    total_transferred = 0
+    
+    with DocStore(duckdb_path) as doc_store:
+        for corpus_name, documents in direct_documents.items():
+            print(f"Processing {len(documents)} documents from corpus {corpus_name}")
+            
+            embeddings_batch = []
+            batch_size = 100
+            
+            for doc_id, _ in tqdm.tqdm(documents, desc=f"Transferring embeddings for {corpus_name}"):
+                # Get document from DuckDB
+                doc = doc_store.get_document_by_id(doc_id)
+                if not doc:
+                    continue
+                
+                # Extract embedding
+                embedding_vector = doc["embedding"]
+                
+                # Add to batch
+                embeddings_batch.append({
+                    'document_id': doc_id,
+                    'embedder_id': embedder.id,
+                    'vector': embedding_vector
+                })
+                
+                # Insert in batches
+                if len(embeddings_batch) >= batch_size:
+                    _bulk_insert_embeddings(session, embeddings_batch)
+                    total_transferred += len(embeddings_batch)
+                    embeddings_batch = []
+            
+            # Insert any remaining embeddings
+            if embeddings_batch:
+                _bulk_insert_embeddings(session, embeddings_batch)
+                total_transferred += len(embeddings_batch)
+    
+    print(f"Total embeddings transferred from DuckDB to main database: {total_transferred}")
+
+
+def load_result_vectors_into_db(
+    session, 
+    results_dir: str, 
+    error_dir: str, 
+    duckdb_path: Optional[str] = None
+):
+    """
+    Load result vectors into the database and optionally into DuckDB.
+    
+    Args:
+        session: SQLAlchemy session
+        results_dir: Directory containing result files
+        error_dir: Directory to write error files
+        duckdb_path: Optional path to DuckDB database to also store embeddings
+    """
     import concurrent.futures
 
     results_dir = pathlib.Path(results_dir)
@@ -288,14 +439,21 @@ def load_result_vectors_into_db(session, results_dir: str, error_dir: str):
     embedder_id = session.query(Embedder).filter_by(name='openai_small').first().id
     docs_with_errors = []
     
-    # Get metadata for direct table access
-    metadata = MetaData()
-    embedding_table = Table('embedding', metadata, schema='topic_modelling')
-    
+    # Open DuckDB connection if path provided
+    if duckdb_path:
+        try:
+            with DocStore(duckdb_path) as doc_store:
+                # Make sure tables exist
+                doc_store._create_tables()
+        except Exception as e:
+            print(f"Warning: Could not initialize DuckDB at {duckdb_path}: {e}")
+            duckdb_path = None
+
     def process_file(file_path):
         file_errors = []
         batch_size = 1000
         embeddings_batch = []
+        duckdb_docs = []
         
         with gzip.open(file_path, 'rt', encoding='utf-8') as f:
             for line in f:
@@ -313,14 +471,35 @@ def load_result_vectors_into_db(session, results_dir: str, error_dir: str):
                     'vector': embedding
                 })
                 
+                # If DuckDB path is provided, collect data for DuckDB
+                if duckdb_path:
+                    # Get the document content from the request
+                    input_text = result['request']['body']['input']
+                    
+                    # Add to DuckDB docs list
+                    duckdb_docs.append({
+                        'id': doc_id,
+                        'content': input_text,
+                        'embedding_json': json.dumps(embedding)
+                    })
+                
                 # Insert in batches to reduce overhead
                 if len(embeddings_batch) >= batch_size:
                     _bulk_insert_embeddings(embeddings_batch)
                     embeddings_batch = []
+                    
+                    # If DuckDB path is provided, insert into DuckDB
+                    if duckdb_path and duckdb_docs:
+                        _insert_into_duckdb(duckdb_docs, file_path)
+                        duckdb_docs = []
             
             # Insert any remaining embeddings
             if embeddings_batch:
                 _bulk_insert_embeddings(embeddings_batch)
+                
+                # If DuckDB path is provided, insert remaining into DuckDB
+                if duckdb_path and duckdb_docs:
+                    _insert_into_duckdb(duckdb_docs, file_path)
                 
         return file_errors
     
@@ -332,6 +511,50 @@ def load_result_vectors_into_db(session, results_dir: str, error_dir: str):
             set_={"vector": text("excluded.vector")}  # Use text() to reference excluded.vector
         )
         session.execute(stmt)
+    
+    def _insert_into_duckdb(docs, file_path):
+        # Extract corpus name from file path
+        corpus_name = None
+        path_parts = pathlib.Path(file_path).parts
+        for part in path_parts:
+            if part != "results" and part != "batch_embeddings":
+                corpus_name = part
+                break
+        
+        if not corpus_name:
+            print(f"Warning: Could not determine corpus name from file path {file_path}")
+            return
+        
+        try:
+            with DocStore(duckdb_path) as doc_store:
+                # Get corpus ID or create if doesn't exist
+                corpus_result = doc_store.run_query("SELECT id FROM corpus WHERE name = ?", [corpus_name])
+                if not corpus_result:
+                    # Get corpus ID from Postgres
+                    corpus = session.query(Corpus).filter_by(name=corpus_name).first()
+                    if corpus:
+                        doc_store.run_query(
+                            "INSERT INTO corpus (id, name, description) VALUES (?, ?, ?)",
+                            [corpus.id, corpus.name, corpus.description]
+                        )
+                        corpus_id = corpus.id
+                    else:
+                        print(f"Warning: Corpus {corpus_name} not found in main database")
+                        return
+                else:
+                    corpus_id = corpus_result[0][0]
+                
+                # Insert documents in batches
+                import pandas as pd
+                df = pd.DataFrame(docs)
+                
+                # Add corpus_id to each document
+                df['corpus_id'] = corpus_id
+                
+                # Insert into DuckDB
+                doc_store.conn.execute("INSERT OR REPLACE INTO document SELECT * FROM df")
+        except Exception as e:
+            print(f"Error inserting into DuckDB: {e}")
     
     # Process files in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -352,19 +575,20 @@ def load_result_vectors_into_db(session, results_dir: str, error_dir: str):
         with open(error_file, 'w') as f:
             json.dump(docs_with_errors, f, indent=2)
 
-def process_error_documents(session, error_file_path: str, client: openai.Client = None):
+def process_error_documents(session, error_file_path: str, client: openai.Client = None, duckdb_path: Optional[str] = None):
     """
     Process documents that failed during batch embedding by:
     1. Reading the error JSON file
     2. Retrieving affected documents
     3. Shortening content to appropriate token length
     4. Making live OpenAI embedding calls
-    5. Saving results to the database
+    5. Saving results to the database and optionally to DuckDB
     
     Args:
         session: SQLAlchemy session
         error_file_path: Path to the JSON file containing document IDs with errors
         client: OpenAI client (if None, a new client will be created)
+        duckdb_path: Optional path to DuckDB database to also store embeddings
     """
     import time
     
@@ -410,6 +634,17 @@ def process_error_documents(session, error_file_path: str, client: openai.Client
     batch_size = 100  # Adjust based on OpenAI rate limits
     success_count = 0
     failed_doc_ids = []
+    duckdb_docs = []
+
+    # Open DuckDB connection if path provided
+    if duckdb_path:
+        try:
+            with DocStore(duckdb_path) as doc_store:
+                # Make sure tables exist
+                doc_store._create_tables()
+        except Exception as e:
+            print(f"Warning: Could not initialize DuckDB at {duckdb_path}: {e}")
+            duckdb_path = None
     
     for i in range(0, len(error_doc_ids), batch_size):
         batch_doc_ids = error_doc_ids[i:i+batch_size]
@@ -456,6 +691,15 @@ def process_error_documents(session, error_file_path: str, client: openai.Client
                         )
                         session.add(new_embedding)
                     
+                    # If DuckDB path is provided, collect data for DuckDB
+                    if duckdb_path:
+                        duckdb_docs.append({
+                            'id': doc_id,
+                            'corpus_id': doc.corpus_id,
+                            'content': shortened_text,
+                            'embedding_json': json.dumps(embedding_vector)
+                        })
+                    
                     # Commit each embedding individually to prevent losing all work if one fails
                     session.commit()
                     success_count += 1
@@ -468,6 +712,27 @@ def process_error_documents(session, error_file_path: str, client: openai.Client
                         # Exponential backoff
                         time.sleep(2 ** attempt)
         
+        # Insert batch into DuckDB if path provided
+        if duckdb_path and duckdb_docs:
+            try:
+                with DocStore(duckdb_path) as doc_store:
+                    import pandas as pd
+                    df = pd.DataFrame(duckdb_docs)
+                    doc_store.conn.execute("INSERT OR REPLACE INTO document SELECT * FROM df")
+                    duckdb_docs = []
+            except Exception as e:
+                print(f"Error inserting into DuckDB: {e}")
+    
+    # Insert any remaining docs into DuckDB
+    if duckdb_path and duckdb_docs:
+        try:
+            with DocStore(duckdb_path) as doc_store:
+                import pandas as pd
+                df = pd.DataFrame(duckdb_docs)
+                doc_store.conn.execute("INSERT OR REPLACE INTO document SELECT * FROM df")
+        except Exception as e:
+            print(f"Error inserting into DuckDB: {e}")
+    
     # Save any remaining failed documents for future processing
     if failed_doc_ids:
         failed_file_path = error_file_path.replace('.json', '_still_failed.json')
@@ -571,7 +836,7 @@ def hash_input_from_request_files(input_dir: str, results_dir: str, output_dir: 
         
         print(f"Wrote {total_mappings} hash-to-embedding mappings for corpus {corpus_name} to {output_path}")
 
-def match_embeddings_for_documents(session, hash_embedding_dir: str, client: openai.Client = None):
+def match_embeddings_for_documents(session, hash_embedding_dir: str, client: openai.Client = None, duckdb_path: Optional[str] = None):
     """
     Match documents in database with embeddings from the hash-to-embedding mapping files.
     Process one corpus at a time to optimize memory usage.
@@ -579,6 +844,8 @@ def match_embeddings_for_documents(session, hash_embedding_dir: str, client: ope
     Args:
         session: SQLAlchemy session
         hash_embedding_dir: Directory containing hash-to-embedding mapping files by corpus
+        client: Optional OpenAI client for live embedding calls
+        duckdb_path: Optional path to DuckDB database to also store embeddings
     """
     import hashlib
     
@@ -601,6 +868,16 @@ def match_embeddings_for_documents(session, hash_embedding_dir: str, client: ope
     total_matched = 0
     total_unmatched = 0
     total_openai_calls = 0
+    
+    # Initialize DuckDB if path provided
+    if duckdb_path:
+        try:
+            with DocStore(duckdb_path) as doc_store:
+                # Make sure tables exist
+                doc_store._create_tables()
+        except Exception as e:
+            print(f"Warning: Could not initialize DuckDB at {duckdb_path}: {e}")
+            duckdb_path = None
     
     for mapping_file in tqdm.tqdm(mapping_files, desc="Processing corpora"):
         corpus_name = mapping_file.name.split('_hash_embedding_mapping')[0]
@@ -634,6 +911,7 @@ def match_embeddings_for_documents(session, hash_embedding_dir: str, client: ope
         # Process documents in batches
         batch_size = 1000
         embeddings_batch = []
+        duckdb_docs = []
         
         for doc in tqdm.tqdm(documents, desc=f"Processing documents in {corpus_name}"):
             # Truncate document text to max token limit
@@ -655,6 +933,15 @@ def match_embeddings_for_documents(session, hash_embedding_dir: str, client: ope
                     'vector': embedding_vector
                 })
                 
+                # If DuckDB path is provided, collect data for DuckDB
+                if duckdb_path:
+                    duckdb_docs.append({
+                        'id': doc.id,
+                        'corpus_id': doc.corpus_id,
+                        'content': truncated_text,
+                        'embedding_json': json.dumps(embedding_vector)
+                    })
+                
                 corpus_matched += 1
             elif client is not None:
                 # Make a live OpenAI embedding call
@@ -671,6 +958,15 @@ def match_embeddings_for_documents(session, hash_embedding_dir: str, client: ope
                     'vector': embedding_vector
                 })
                 
+                # If DuckDB path is provided, collect data for DuckDB
+                if duckdb_path:
+                    duckdb_docs.append({
+                        'id': doc.id,
+                        'corpus_id': doc.corpus_id,
+                        'content': truncated_text,
+                        'embedding_json': json.dumps(embedding_vector)
+                    })
+                
                 corpus_matched += 1
                 openai_calls += 1
             else:
@@ -680,10 +976,40 @@ def match_embeddings_for_documents(session, hash_embedding_dir: str, client: ope
             if len(embeddings_batch) >= batch_size:
                 _bulk_insert_embeddings(session, embeddings_batch)
                 embeddings_batch = []
+                
+                # Insert into DuckDB if path provided
+                if duckdb_path and duckdb_docs:
+                    try:
+                        with DocStore(duckdb_path) as doc_store:
+                            # Ensure corpus exists in DuckDB
+                            corpus_result = doc_store.run_query("SELECT id FROM corpus WHERE id = ?", [doc.corpus_id])
+                            if not corpus_result:
+                                doc_store.run_query(
+                                    "INSERT INTO corpus (id, name, description) VALUES (?, ?, ?)",
+                                    [corpus.id, corpus.name, corpus.description]
+                                )
+                            
+                            # Insert documents
+                            import pandas as pd
+                            df = pd.DataFrame(duckdb_docs)
+                            doc_store.conn.execute("INSERT OR REPLACE INTO document SELECT * FROM df")
+                            duckdb_docs = []
+                    except Exception as e:
+                        print(f"Error inserting into DuckDB: {e}")
         
         # Insert any remaining embeddings
         if embeddings_batch:
             _bulk_insert_embeddings(session, embeddings_batch)
+            
+            # Insert remaining into DuckDB if path provided
+            if duckdb_path and duckdb_docs:
+                try:
+                    with DocStore(duckdb_path) as doc_store:
+                        import pandas as pd
+                        df = pd.DataFrame(duckdb_docs)
+                        doc_store.conn.execute("INSERT OR REPLACE INTO document SELECT * FROM df")
+                except Exception as e:
+                    print(f"Error inserting into DuckDB: {e}")
         
         print(f"Matched {corpus_matched} documents with embeddings in corpus {corpus_name}")
         print(f"Could not match {len(corpus_unmatched)} documents in corpus {corpus_name}")
@@ -720,46 +1046,125 @@ def _bulk_insert_embeddings(session, embeddings):
 def main():
     import configuration as cfg
     import database
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Batch embedding processing tool")
+    parser.add_argument("--prepare", action="store_true", help="Prepare batch files for processing")
+    parser.add_argument("--submit", action="store_true", help="Submit batch files to OpenAI")
+    parser.add_argument("--download", action="store_true", help="Download batch results")
+    parser.add_argument("--load", action="store_true", help="Load results into database")
+    parser.add_argument("--process-errors", action="store_true", help="Process documents with errors")
+    parser.add_argument("--request-dir", default="ignore/batch_embeddings/request_files", help="Directory for request files")
+    parser.add_argument("--result-dir", default="ignore/batch_embeddings/results", help="Directory for result files")
+    parser.add_argument("--batch-info", default="ignore/batch_embeddings/batch_info.json", help="Path to batch info file")
+    parser.add_argument("--hash-mapping-dir", default="ignore/batch_embeddings/hash_mapping", help="Directory for hash mapping files")
+    parser.add_argument("--error-dir", default="ignore/batch_embeddings/errors", help="Directory for error files")
+    parser.add_argument("--error-file", default=None, help="Path to error file for processing")
+    parser.add_argument("--duckdb-path", default="ignore/embedding_store.db", help="Path to DuckDB database")
+    
+    args = parser.parse_args()
+    
+    # If no arguments provided, show help
+    if not any(vars(args).values()):
+        parser.print_help()
+        return
 
     config = cfg.load_config_from_env()
     db_config = config.database
 
     with database.get_session(db_config) as session:
-        # Step 1: Create hash mapping from request files and link with embeddings from results
-        # hash_input_from_request_files(
-        #     "ignore/batch_embeddings/request_files",
-        #     "ignore/batch_embeddings/results",
-        #     "ignore/batch_embeddings/hash_embedding_mapping.jsonl.gz"
-        # )
-        
-        # Step 2: Match documents with embeddings using the mapping
-        # match_embeddings_for_documents(
-        #     session,
-        #     "ignore/batch_embeddings/hash_embedding_mapping.jsonl.gz"
-        # )
-        
-        # Optional: Process documents that couldn't be matched
-        # process_error_documents(session, "unmatched_documents.json")
-        
-        # Generate batch files if needed
-        # create_batch_files_across_corpora(session, "ignore/batch_embeddings/request_files")
-        
-        # For batch submission and downloading (uncomment as needed)
-        # batch_processor = BatchProcessor(openai.Client())
-        # batch_processor.submit_batches("ignore/batch_embeddings/request_files")
-        # batch_processor.save_batch_info("ignore/batch_embeddings/batch_info.json")
-        # batch_processor.load_batch_info("ignore/batch_embeddings/batch_info.json")
-        # batch_processor.download_all_results("ignore/batch_embeddings/results")
-
-        # create hash files
-        # hash_input_from_request_files("ignore/batch_embeddings/request_files", "ignore/batch_embeddings/results", "ignore/batch_embeddings/hash_embedding_mapping.jsonl.gz")
-
-        # match embeddings
+        # Make OpenAI client
         client = openai.Client()
-        match_embeddings_for_documents(session, "ignore/batch_embeddings/hash_embedding_mapping.jsonl.gz", client)
+
+        # Create directories if they don't exist
+        for dir_path in [args.request_dir, args.result_dir, args.hash_mapping_dir, args.error_dir]:
+            pathlib.Path(dir_path).mkdir(parents=True, exist_ok=True)
+        
+        # Step 1: Prepare batch files (check DuckDB first for existing embeddings)
+        if args.prepare:
+            print("Preparing batch files for processing...")
+            direct_to_db_documents = create_batch_files_across_corpora(
+                session, 
+                args.request_dir,
+                args.duckdb_path
+            )
+            
+            # Process documents that already have embeddings in DuckDB
+            if direct_to_db_documents:
+                print("Processing documents with existing embeddings in DuckDB...")
+                process_direct_to_db_documents(
+                    session, 
+                    direct_to_db_documents, 
+                    args.duckdb_path
+                )
+            else:
+                print("No documents with existing embeddings in DuckDB to process")
+        
+        # Step 2: Submit batch files to OpenAI
+        if args.submit:
+            print("Submitting batch files to OpenAI...")
+            batch_processor = BatchProcessor(client)
+            batch_processor.submit_batches(args.request_dir)
+            batch_processor.save_batch_info(args.batch_info)
+            print(f"Batch information saved to {args.batch_info}")
+        
+        # Step 3: Download batch results
+        if args.download:
+            print("Downloading batch results...")
+            batch_processor = BatchProcessor(client)
+            batch_processor.load_batch_info(args.batch_info)
+            batch_processor.download_all_results(args.result_dir)
+            print(f"Results downloaded to {args.result_dir}")
+        
+        # Step 4: Load results into database and DuckDB
+        if args.load:
+            print("Loading results into database...")
+            load_result_vectors_into_db(
+                session, 
+                args.result_dir, 
+                args.error_dir,
+                args.duckdb_path
+            )
+            
+            # Create hash mapping files
+            print("Creating hash mapping files...")
+            hash_input_from_request_files(
+                args.request_dir, 
+                args.result_dir, 
+                args.hash_mapping_dir
+            )
+            
+            # Match embeddings for documents
+            print("Matching embeddings for documents...")
+            match_embeddings_for_documents(
+                session, 
+                args.hash_mapping_dir, 
+                client,
+                args.duckdb_path
+            )
+        
+        # Step 5: Process documents with errors
+        if args.process_errors:
+            if not args.error_file:
+                # Try to find most recent error file
+                error_files = list(pathlib.Path(args.error_dir).glob("*.json"))
+                if not error_files:
+                    print("No error files found in error directory")
+                    return
+                error_file = max(error_files, key=lambda x: x.stat().st_mtime)
+                print(f"Using most recent error file: {error_file}")
+            else:
+                error_file = args.error_file
+            
+            print(f"Processing documents with errors from {error_file}...")
+            process_error_documents(
+                session, 
+                error_file,
+                client,
+                args.duckdb_path
+            )
         
         session.commit()
-
 
 
 if __name__ == "__main__":
