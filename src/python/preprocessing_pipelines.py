@@ -96,7 +96,8 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
         corpus_id=corpus.id,
         content=text,
         language_code='en',
-        type_id=document_types['raw']
+        type_id=document_types['raw'],
+        parent_id=None,
     ) for text in corpus_processing.raw_texts]
     raw_docs = session.scalars(insert(Document).returning(Document, sort_by_parameter_order=True), raw_documents)
     raw_doc_ids = [doc.id for doc in raw_docs]
@@ -108,8 +109,9 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
         corpus_id=corpus.id,
         content=' '.join(tokenized_text),
         language_code='en',
-        type_id=document_types['preprocessed']
-    ) for tokenized_text in corpus_processing.tokenized_texts]
+        type_id=document_types['preprocessed'],
+        parent_id=raw_doc_ids,
+    ) for raw_doc_id, tokenized_text in zip(raw_doc_ids, corpus_processing.tokenized_texts)]
     session.execute(insert(Document), preprocessed_documents)
     pbar.update(1)
 
@@ -120,7 +122,7 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
         content=' '.join(transformed_text),
         language_code='en',
         type_id=document_types['vocabulary_only']
-    ) for transformed_text in corpus_processing.transformed_texts]
+    ) for raw_doc_id, transformed_text in zip(raw_doc_ids, corpus_processing.transformed_texts)]
     session.execute(insert(Document), vocabulary_documents)
     pbar.update(1)
 
@@ -128,9 +130,9 @@ def store_in_database(session: Session, corpus_name: str, corpus_processing: Cor
     pbar.set_description("Adding embeddings")
     embeddings = [dict(
         embedder_id=embedder.id,
-        document_id=doc_id,
+        document_id=raw_doc_ids,
         vector=tfidf_vector.toarray().tolist()[0]
-    ) for doc_id, tfidf_vector in zip(raw_doc_ids, corpus_processing.tfidf_matrix)]
+    ) for raw_doc_id, tfidf_vector in zip(raw_doc_ids, corpus_processing.tfidf_matrix)]
     session.execute(insert(Embedding), embeddings)
     pbar.update(1)
 

@@ -46,6 +46,7 @@ class Document(Base):
     content = Column(Text)
     language_code = Column(String(10))
     type_id = Column(Integer, ForeignKey('topic_modelling.document_type.id'))
+    parent_id = Column(Integer, ForeignKey('topic_modelling.document.id'), nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     
     corpus = relationship("Corpus")

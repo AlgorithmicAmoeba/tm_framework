@@ -28,7 +28,7 @@ class Corpus:
             .join(Document.document_type)
             .filter(Document.corpus_id == self.corpus.id)
             .filter(DocumentType.name == 'preprocessed')
-            
+            .order_by(Document.parent_id)
             .all()
         )
     
@@ -39,6 +39,7 @@ class Corpus:
             .join(Document.document_type)
             .filter(Document.corpus_id == self.corpus.id)
             .filter(DocumentType.name == 'vocabulary_only')
+            .order_by(Document.parent_id)
             .all()
         )
 
@@ -52,6 +53,7 @@ class Corpus:
             .filter(Document.corpus_id == self.corpus.id)
             .filter(Embedder.name == embedder_name)
             .filter(DocumentType.name == 'raw')
+            .order_by(Document.id)
             .all()
         )
 
