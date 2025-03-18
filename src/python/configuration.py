@@ -1,11 +1,16 @@
 import dataclasses
 import json
 import os
+import pathlib
 
 @dataclasses.dataclass
 class Config:
     database: "DatabaseConfig"
     openai: "OpenAIConfig"
+    data_dir: "DataDirConfig"
+
+    def get_data_path(self):
+        return pathlib.Path(self.data_dir.data_dir)
 
 
 @dataclasses.dataclass
@@ -26,6 +31,11 @@ class OpenAIConfig:
     api_key: str
 
 
+@dataclasses.dataclass
+class DataDirConfig:
+    data_dir: str
+
+
 def load_config(path: str) -> Config:
     with open(path, "r") as f:
         raw_config = json.load(f)
@@ -38,9 +48,14 @@ def load_config(path: str) -> Config:
         **raw_config["openai"]
     )
 
+    data_dir_config = DataDirConfig(
+        **raw_config["data_dir"]
+    )
+
     config = Config(
         database=database_config,
         openai=openai_config,
+        data_dir=data_dir_config
     )
     
     return config
