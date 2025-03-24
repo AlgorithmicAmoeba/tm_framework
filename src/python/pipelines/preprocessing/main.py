@@ -5,6 +5,7 @@ These functions handle text preprocessing, tokenization, and TF-IDF computation 
 import hashlib
 import re
 import string
+import logging
 from typing import Optional, List, Dict, Any, Set
 
 from sqlalchemy import text
@@ -216,34 +217,50 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
         corpus_name: Name of the corpus
         processed_data: Data returned from the preprocessor
     """
-    # Delete existing data for this corpus to ensure idempotency
-    delete_queries = [
-        text("DELETE FROM pipeline.used_raw_document WHERE corpus_name = :corpus_name"),
-        text("DELETE FROM pipeline.tfidf_vector WHERE corpus_name = :corpus_name"),
-        text("DELETE FROM pipeline.vocabulary_word WHERE corpus_name = :corpus_name"),
-        text("DELETE FROM pipeline.preprocessed_document WHERE corpus_name = :corpus_name")
-    ]
+    logging.info(f"Storing preprocessed documents for corpus: {corpus_name}")
     
-    for query in delete_queries:
-        session.execute(query, {"corpus_name": corpus_name})
+    # Get existing data to track what's already processed
+    existing_vocab = session.execute(
+        text("SELECT word, word_index FROM pipeline.vocabulary_word WHERE corpus_name = :corpus_name"),
+        {"corpus_name": corpus_name}
+    ).fetchall()
+    existing_vocab_dict = {row[0]: {'index': row[1], 'processed': False} for row in existing_vocab}
     
-    session.commit()
+    existing_docs = session.execute(
+        text("SELECT raw_document_hash FROM pipeline.preprocessed_document WHERE corpus_name = :corpus_name"),
+        {"corpus_name": corpus_name}
+    ).scalars().fetchall()
+    existing_docs_dict = {doc_hash: False for doc_hash in existing_docs}
+
+    logging.info(f"Found {len(existing_vocab_dict)} existing vocabulary words and {len(existing_docs_dict)} existing documents")
+    
+    # Track statistics
+    vocab_existing = 0
+    vocab_inserted = 0
+    docs_existing = 0
+    docs_inserted = 0
+    tfidf_inserted = 0
     
     # Insert vocabulary words
     vocabulary = processed_data['vocabulary']
     vocabulary_data = []
     
     for idx, word in enumerate(vocabulary):
+        if word in existing_vocab_dict:
+            existing_vocab_dict[word]['processed'] = True
+            vocab_existing += 1
+            continue
+            
         vocabulary_data.append({
             "corpus_name": corpus_name,
             "word": word,
             "word_index": idx
         })
     
-    # Process in batches to avoid memory issues
+    # Process vocabulary in batches to avoid memory issues
     batch_size = 1000
     
-    # Insert vocabulary words
+    # Insert new vocabulary words
     for i in range(0, len(vocabulary_data), batch_size):
         batch = vocabulary_data[i:i+batch_size]
         insert_vocab_query = text("""
@@ -254,8 +271,10 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
         
         for item in batch:
             session.execute(insert_vocab_query, item)
+            vocab_inserted += 1
         
         session.commit()
+        logging.debug(f"Processed vocabulary batch {i//batch_size + 1}, inserted {len(batch)} words")
     
     # Insert preprocessed documents
     doc_hashes = processed_data['doc_hashes']
@@ -267,15 +286,20 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
         doc_hash = doc_hashes[i]
         content = cleaned_texts[i]
         raw_content = raw_texts[i]
+        content_hash = hash_text(content)
         
+        # Mark document as processed if it exists
+        if doc_hash in existing_docs_dict:
+            existing_docs_dict[doc_hash] = True
+            docs_existing += 1
+            continue
+            
         # Insert preprocessed document
         insert_doc_query = text("""
             INSERT INTO pipeline.preprocessed_document (corpus_name, raw_document_hash, content, content_hash)
             VALUES (:corpus_name, :document_hash, :content, :content_hash)
             ON CONFLICT DO NOTHING
         """)
-        
-        content_hash = hash_text(content)
         
         session.execute(
             insert_doc_query,
@@ -286,6 +310,7 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
                 "content_hash": content_hash
             }
         )
+        docs_inserted += 1
         
         # Insert raw document that passed filtering
         insert_raw_doc_query = text("""
@@ -314,7 +339,8 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
             INSERT INTO pipeline.tfidf_vector 
             (corpus_name, raw_document_hash, terms)
             VALUES (:corpus_name, :document_hash, :terms)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (corpus_name, raw_document_hash) 
+            DO UPDATE SET terms = EXCLUDED.terms
         """)
         
         for item in batch:
@@ -326,8 +352,55 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
                     "terms": json.dumps(item['terms'])
                 }
             )
+            tfidf_inserted += 1
         
         session.commit()
+        logging.debug(f"Processed TF-IDF batch {i//batch_size + 1}, processed {len(batch)} vectors")
+    
+    # Delete data that was not marked as processed
+    docs_deleted = 0
+    for doc_hash, processed in existing_docs_dict.items():
+        if processed:
+            continue
+            
+        delete_doc_query = text("""
+            DELETE FROM pipeline.preprocessed_document
+            WHERE corpus_name = :corpus_name AND raw_document_hash = :document_hash
+        """)
+        
+        session.execute(
+            delete_doc_query,
+            {"corpus_name": corpus_name, "document_hash": doc_hash}
+        )
+        docs_deleted += 1
+    
+    vocab_deleted = 0
+    for word, info in existing_vocab_dict.items():
+        if info['processed']:
+            continue
+            
+        delete_vocab_query = text("""
+            DELETE FROM pipeline.vocabulary_word
+            WHERE corpus_name = :corpus_name AND word = :word
+        """)
+        
+        session.execute(
+            delete_vocab_query,
+            {"corpus_name": corpus_name, "word": word}
+        )
+        vocab_deleted += 1
+    
+    session.commit()
+    
+    # Log statistics
+    logging.info(f"Preprocessing storage complete for corpus: {corpus_name}")
+    logging.info(f"  Vocabulary words existing: {vocab_existing}")
+    logging.info(f"  Vocabulary words inserted: {vocab_inserted}")
+    logging.info(f"  Vocabulary words deleted: {vocab_deleted}")
+    logging.info(f"  Documents existing: {docs_existing}")
+    logging.info(f"  Documents inserted: {docs_inserted}")
+    logging.info(f"  Documents deleted: {docs_deleted}")
+    logging.info(f"  TF-IDF vectors processed: {tfidf_inserted}")
 
 
 def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: dict = None):
@@ -339,6 +412,8 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
         corpus_name: Name of the corpus to preprocess
         preprocessing_params: Dictionary of preprocessing parameters
     """
+    logging.info(f"Starting preprocessing for corpus: {corpus_name}")
+    
     # Default parameters if none provided
     if preprocessing_params is None:
         preprocessing_params = {
@@ -364,7 +439,7 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     docs = [(row[0], row[1]) for row in result]
     
     if not docs:
-        print(f"No documents found for corpus: {corpus_name}")
+        logging.warning(f"No documents found for corpus: {corpus_name}")
         return
     
     doc_hashes, texts = zip(*docs)
@@ -374,19 +449,23 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     preprocessor = TextPreprocessor(**preprocessing_params)
     
     # Process the corpus
-    print(f"Processing {original_doc_count} documents for corpus: {corpus_name}")
+    logging.info(f"Processing {original_doc_count} documents for corpus: {corpus_name}")
     processed_data = preprocessor.process_corpus(corpus_name, list(texts))
     doc_hashes_used = [doc_hashes[i] for i in processed_data['valid_indices']]
     processed_data['doc_hashes'] = doc_hashes_used
     
     # Store the processed data
-    print(f"Storing processed data for corpus: {corpus_name}")
     store_preprocessed_documents(session, corpus_name, processed_data)
     
     # Print statistics
-    print(f"Preprocessing complete for corpus: {corpus_name}")
-    print(f"Documents: {processed_data['filtered_docs_count']} of {processed_data['original_docs_count']} ({processed_data['filtered_docs_count']/processed_data['original_docs_count']*100:.1f}%)")
-    print(f"Vocabulary: {processed_data['filtered_vocab_size']} of {processed_data['original_vocab_size']} ({processed_data['filtered_vocab_size']/processed_data['original_vocab_size']*100:.1f}%)")
+    filtered_count = processed_data['filtered_docs_count']
+    original_count = processed_data['original_docs_count']
+    filtered_vocab = processed_data['filtered_vocab_size']
+    original_vocab = processed_data['original_vocab_size']
+    
+    logging.info(f"Preprocessing complete for corpus: {corpus_name}")
+    logging.info(f"Documents: {filtered_count} of {original_count} ({filtered_count/original_count*100:.1f}%)")
+    logging.info(f"Vocabulary: {filtered_vocab} of {original_vocab} ({filtered_vocab/original_vocab*100:.1f}%)")
 
 
 def preprocess_newsgroups(session: Session, preprocessing_params: dict = None):
@@ -415,6 +494,12 @@ def preprocess_twitter_financial(session: Session, preprocessing_params: dict = 
 
 
 if __name__ == '__main__':
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
     # Load configuration
     config = cfg.load_config_from_env()
     db_config = config.database
@@ -473,21 +558,21 @@ if __name__ == '__main__':
         }
         
         # Run preprocessing for each corpus
-        print("Starting preprocessing pipelines...")
+        logging.info("Starting preprocessing pipelines...")
         
-        print("\nPreprocessing newsgroups corpus...")
+        logging.info("Preprocessing newsgroups corpus...")
         preprocess_newsgroups(session, newsgroups_params)
         
-        print("\nPreprocessing Wikipedia corpus...")
+        logging.info("Preprocessing Wikipedia corpus...")
         preprocess_wikipedia(session, wikipedia_params)
         
-        print("\nPreprocessing IMDB reviews corpus...")
+        logging.info("Preprocessing IMDB reviews corpus...")
         preprocess_imdb(session, imdb_params)
         
-        print("\nPreprocessing TREC questions corpus...")
+        logging.info("Preprocessing TREC questions corpus...")
         preprocess_trec(session, trec_params)
         
-        print("\nPreprocessing Twitter financial news corpus...")
+        logging.info("Preprocessing Twitter financial news corpus...")
         preprocess_twitter_financial(session, twitter_params)
         
-        print("\nAll preprocessing pipelines completed successfully.")
+        logging.info("All preprocessing pipelines completed successfully.")
