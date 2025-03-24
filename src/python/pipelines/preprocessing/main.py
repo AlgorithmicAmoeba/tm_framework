@@ -270,17 +270,20 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
         
         # Insert preprocessed document
         insert_doc_query = text("""
-            INSERT INTO pipeline.preprocessed_document (corpus_name, document_hash, content)
-            VALUES (:corpus_name, :document_hash, :content)
+            INSERT INTO pipeline.preprocessed_document (corpus_name, raw_document_hash, content, content_hash)
+            VALUES (:corpus_name, :document_hash, :content, :content_hash)
             ON CONFLICT DO NOTHING
         """)
+        
+        content_hash = hash_text(content)
         
         session.execute(
             insert_doc_query,
             {
                 "corpus_name": corpus_name,
                 "document_hash": doc_hash,
-                "content": content
+                "content": content,
+                "content_hash": content_hash
             }
         )
         
@@ -309,7 +312,7 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
         batch = tfidf_vectors[i:i+batch_size]
         insert_term_query = text("""
             INSERT INTO pipeline.tfidf_vector 
-            (corpus_name, document_hash, terms)
+            (corpus_name, raw_document_hash, terms)
             VALUES (:corpus_name, :document_hash, :terms)
             ON CONFLICT DO NOTHING
         """)
@@ -352,7 +355,7 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     
     # Fetch documents from the corpus
     fetch_docs_query = text("""
-        SELECT content_hash, content 
+        SELECT document_hash, content 
         FROM pipeline.document
         WHERE corpus_name = :corpus_name
     """)
