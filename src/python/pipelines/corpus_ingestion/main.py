@@ -4,6 +4,7 @@ These functions handle the preprocessing and storage of different corpora using 
 """
 import hashlib
 import json
+import logging
 from typing import Optional, Tuple
 
 from sqlalchemy import text
@@ -41,22 +42,35 @@ def store_corpus_documents(session: Session, corpus_name: str, texts: list[str],
         upsert_corpus_query, 
         {"name": corpus_name, "description": description}
     )
+
+    # get all existing document hashes
+    existing_hashes = session.execute(
+        text("SELECT content_hash FROM pipeline.document WHERE corpus_name = :corpus_name"),
+        {"corpus_name": corpus_name}
+    ).scalars().fetchall()
+    existing_hashes = {row: False for row in existing_hashes}
     
-    # Delete all existing documents for this corpus to ensure idempotency
-    delete_docs_query = text("""
-        DELETE FROM pipeline.document 
-        WHERE corpus_name = :corpus_name
-    """)
-    session.execute(delete_docs_query, {"corpus_name": corpus_name})
-    session.commit()
+    logging.info(f"Processing {len(texts)} documents for corpus '{corpus_name}'")
+    logging.info(f"Found {len(existing_hashes)} existing documents in corpus")
+    
+    # Track document counts
+    docs_existing = 0
+    docs_inserted = 0
     
     # Process documents in batches to avoid memory issues with large datasets
     batch_size = 1000
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i:i+batch_size]
+        batch_inserts = 0
         
         for batch_text in batch_texts:
             content_hash = hash_text(batch_text)
+
+            # Skip if the document already exists
+            if content_hash in existing_hashes:
+                existing_hashes[content_hash] = True
+                docs_existing += 1
+                continue
             
             insert_doc_query = text("""
                 INSERT INTO pipeline.document 
@@ -73,9 +87,39 @@ def store_corpus_documents(session: Session, corpus_name: str, texts: list[str],
                     "content": batch_text
                 }
             )
+            docs_inserted += 1
+            batch_inserts += 1
         
         # Commit after each batch
         session.commit()
+        logging.debug(f"Processed batch {i//batch_size + 1}, inserted {batch_inserts} documents")
+
+    # Delete documents that were not updated
+    docs_deleted = 0
+    for content_hash, updated in existing_hashes.items():
+        if updated:
+            continue
+
+        assert updated, f"Document with hash {content_hash} is going to be deleted"
+        
+        delete_doc_query = text("""
+            DELETE FROM pipeline.document
+            WHERE corpus_name = :corpus_name AND content_hash = :content_hash
+        """)
+
+        session.execute(
+            delete_doc_query,
+            {"corpus_name": corpus_name, "content_hash": content_hash}
+        )
+        docs_deleted += 1
+
+    session.commit()
+    
+    logging.info(f"Corpus '{corpus_name}' processing complete:")
+    logging.info(f"  Documents already existing: {docs_existing}")
+    logging.info(f"  Documents newly inserted: {docs_inserted}")
+    logging.info(f"  Documents deleted: {docs_deleted}")
+    logging.info(f"  Total documents in corpus: {docs_existing + docs_inserted}")
 
 
 def ingest_newsgroups(session: Session, subset: Optional[int] = None, description: Optional[str] = None):
@@ -209,6 +253,12 @@ def ingest_twitter_financial(session: Session, subset: Optional[int] = None, des
 
 
 if __name__ == '__main__':
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
     # Load configuration
     config = cfg.load_config_from_env()
     db_config = config.database
@@ -222,22 +272,22 @@ if __name__ == '__main__':
     # Create database session
     with get_session(db_config) as session:
         # Example usage of the ingestion functions
-        print("Ingesting newsgroups corpus...")
+        logging.info("Ingesting newsgroups corpus...")
         ingest_newsgroups(session)
         
-        print("Ingesting IMDB reviews corpus...")
+        logging.info("Ingesting IMDB reviews corpus...")
         ingest_imdb(session)
         
-        print("Ingesting TREC questions corpus...")
+        logging.info("Ingesting TREC questions corpus...")
         ingest_trec(session)
         
         # For Wikipedia, you need to provide a file path
         if data_path:
             wiki_path = data_path / 'raw_data/wikipedia_20k_sample.jsonl'
-            print(f"Ingesting Wikipedia sample from {wiki_path}...")
+            logging.info(f"Ingesting Wikipedia sample from {wiki_path}...")
             ingest_wikipedia(session, str(wiki_path))
         
-        print("Ingesting Twitter financial news corpus...")
+        logging.info("Ingesting Twitter financial news corpus...")
         ingest_twitter_financial(session)
         
-        print("All corpora successfully ingested.")
+        logging.info("All corpora successfully ingested.")
