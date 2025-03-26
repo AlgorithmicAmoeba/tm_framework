@@ -25,6 +25,22 @@ def hash_text(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()
 
 
+def color_logging_text(message: str, color: str) -> str:
+    """Change the color of the logging message."""
+    color_map = {
+        'red': '31',
+        'green': '32',
+        'yellow': '33',
+        'blue': '34',
+        'purple': '35',
+        'cyan': '36',
+        'white': '37'
+    }
+    
+    color_code = color_map.get(color, '37')
+    return f"\033[{color_code}m{message}\033[0m"
+
+
 class TextPreprocessor:
     """Text preprocessing class with configurable options."""
     
@@ -118,9 +134,8 @@ class TextPreprocessor:
         )
         tfidf_matrix = vectorizer.fit_transform(cleaned_texts)
         feature_names = vectorizer.get_feature_names_out()
-        
+
         # Filter documents if needed
-        valid_indices = list(range(len(texts)))
         if self._min_words_per_document:
             text_lens = [len(tokens) for tokens in tokenized_texts]
             valid_indices = [i for i, length in enumerate(text_lens) 
@@ -131,12 +146,11 @@ class TextPreprocessor:
             cleaned_texts = [cleaned_texts[i] for i in valid_indices]
             tokenized_texts = [tokenized_texts[i] for i in valid_indices]
             tfidf_matrix = tfidf_matrix[valid_indices]
+            raw_texts = [texts[i] for i in valid_indices]
         
         # Build document-term vectors for database storage
         tfidf_vectors = []
-        for i, doc_idx in enumerate(valid_indices):
-            doc_hash = doc_hashes[doc_idx]
-            # Get full vector as array
+        for i, doc_hash in enumerate(doc_hashes):            # Get full vector as array
             row = tfidf_matrix[i].toarray()[0].tolist()
             
             tfidf_vectors.append({
@@ -150,12 +164,11 @@ class TextPreprocessor:
             'cleaned_texts': cleaned_texts,
             'vocabulary': feature_names,
             'tfidf_vectors': tfidf_vectors,
-            'valid_indices': valid_indices,
             'original_docs_count': len(texts),
             'filtered_docs_count': len(valid_indices),
             'original_vocab_size': original_vocab_size,
             'filtered_vocab_size': len(feature_names),
-            'raw_texts': [texts[i] for i in valid_indices]
+            'raw_texts': raw_texts,
         }
     
     def _clean_texts(self, texts: List[str]) -> List[str]:
@@ -232,13 +245,20 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
     ).scalars().fetchall()
     existing_docs_dict = {doc_hash: False for doc_hash in existing_docs}
 
-    logging.info(f"Found {len(existing_vocab_dict)} existing vocabulary words and {len(existing_docs_dict)} existing documents")
+    existing_vectors = session.execute(
+        text("SELECT raw_document_hash, terms FROM pipeline.tfidf_vector WHERE corpus_name = :corpus_name"),
+        {"corpus_name": corpus_name}
+    ).fetchall()
+    existing_vectors_dict = {row[0]: {'vector': row[1], "processed": False} for row in existing_vectors}
+
+    # logging.info(f"Found {len(existing_vocab_dict)} existing vocabulary words and {len(existing_docs_dict)} existing documents")
     
     # Track statistics
     vocab_existing = 0
     vocab_inserted = 0
     docs_existing = 0
     docs_inserted = 0
+    tfidf_existing = 0
     tfidf_inserted = 0
     
     # Insert vocabulary words
@@ -279,7 +299,6 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
     # Insert preprocessed documents
     doc_hashes = processed_data['doc_hashes']
     cleaned_texts = processed_data['cleaned_texts']
-    valid_indices = processed_data['valid_indices']
     raw_texts = processed_data['raw_texts']
     
     for i in range(len(doc_hashes)):
@@ -333,7 +352,19 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
     # Insert document-term matrix entries
     tfidf_vectors = processed_data['tfidf_vectors']
     
-    for i in range(0, len(tfidf_vectors), batch_size):
+    tfidf_data = []
+    for i in range(len(tfidf_vectors)):
+        doc_hash = doc_hashes[i]
+        tfidf_vector = tfidf_vectors[i]
+        existing_tfidf_vector = existing_vectors_dict.get(doc_hash)
+        if existing_tfidf_vector is not None and existing_tfidf_vector["vector"] == tfidf_vector["terms"]:
+            existing_tfidf_vector["processed"] = True
+            tfidf_existing += 1
+            continue
+
+        tfidf_data.append(tfidf_vector)
+
+    for i in range(0, len(tfidf_data), batch_size):
         batch = tfidf_vectors[i:i+batch_size]
         insert_term_query = text("""
             INSERT INTO pipeline.tfidf_vector 
@@ -349,7 +380,7 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
                 {
                     "corpus_name": item['corpus_name'],
                     "document_hash": item['document_hash'],
-                    "terms": json.dumps(item['terms'])
+                    "terms": item['terms']
                 }
             )
             tfidf_inserted += 1
@@ -362,6 +393,8 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
     for doc_hash, processed in existing_docs_dict.items():
         if processed:
             continue
+
+        assert False, "Going to delete something"
             
         delete_doc_query = text("""
             DELETE FROM pipeline.preprocessed_document
@@ -378,7 +411,8 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
     for word, info in existing_vocab_dict.items():
         if info['processed']:
             continue
-            
+
+        assert False, "Going to delete something"  
         delete_vocab_query = text("""
             DELETE FROM pipeline.vocabulary_word
             WHERE corpus_name = :corpus_name AND word = :word
@@ -389,18 +423,79 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
             {"corpus_name": corpus_name, "word": word}
         )
         vocab_deleted += 1
+
+
+    tfidf_deleted = 0
+    for doc_hash, info in existing_vectors_dict.items():
+        if info['processed']:
+            continue
+
+        assert False, "Going to delete something"
+        delete_tfidf_query = text("""
+            DELETE FROM pipeline.tfidf_vector
+            WHERE corpus_name = :corpus_name AND raw_document_hash = :document_hash
+        """)
+
+        session.execute(
+            delete_tfidf_query,
+            {"corpus_name": corpus_name, "document_hash": doc_hash}
+        )
+        tfidf_deleted += 1
     
     session.commit()
     
     # Log statistics
     logging.info(f"Preprocessing storage complete for corpus: {corpus_name}")
     logging.info(f"  Vocabulary words existing: {vocab_existing}")
-    logging.info(f"  Vocabulary words inserted: {vocab_inserted}")
-    logging.info(f"  Vocabulary words deleted: {vocab_deleted}")
+    if vocab_inserted:
+        logging.info(color_logging_text(
+            f"  Vocabulary words inserted: {vocab_inserted}",
+            color='green'
+        ))
+    else:
+        logging.info(f"  Vocabulary words inserted: {vocab_inserted}")
+
+    if vocab_deleted:
+        logging.info(color_logging_text(
+            f"  Vocabulary words deleted: {vocab_deleted}",
+            color='red'
+        ))
+    else:
+        logging.info(f"  Vocabulary words deleted: {vocab_deleted}")
     logging.info(f"  Documents existing: {docs_existing}")
-    logging.info(f"  Documents inserted: {docs_inserted}")
-    logging.info(f"  Documents deleted: {docs_deleted}")
-    logging.info(f"  TF-IDF vectors processed: {tfidf_inserted}")
+
+    if docs_inserted:
+        logging.info(color_logging_text(
+            f"  Documents inserted: {docs_inserted}",
+            color='green'
+        ))
+    else:
+        logging.info(f"  Documents inserted: {docs_inserted}")
+
+    if docs_deleted:
+        logging.info(color_logging_text(
+            f"  Documents deleted: {docs_deleted}",
+            color='red'
+        ))
+    else:
+        logging.info(f"  Documents deleted: {docs_deleted}")
+
+    logging.info(f"  TF-IDF vectors existing: {tfidf_existing}")
+    if tfidf_inserted:
+        logging.info(color_logging_text(
+            f"  TF-IDF vectors processed: {tfidf_inserted}",
+            color='green'
+        ))
+    else:
+        logging.info(f"  TF-IDF vectors processed: {tfidf_inserted}")
+
+    if tfidf_deleted:
+        logging.info(color_logging_text(
+            f"  TF-IDF vectors deleted: {tfidf_deleted}",
+            color='red'
+        ))
+    else:
+        logging.info(f"  TF-IDF vectors deleted: {tfidf_deleted}")
 
 
 def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: dict = None):
@@ -430,7 +525,7 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     
     # Fetch documents from the corpus
     fetch_docs_query = text("""
-        SELECT document_hash, content 
+        SELECT content_hash, content 
         FROM pipeline.document
         WHERE corpus_name = :corpus_name
     """)
@@ -451,8 +546,6 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     # Process the corpus
     logging.info(f"Processing {original_doc_count} documents for corpus: {corpus_name}")
     processed_data = preprocessor.process_corpus(corpus_name, list(texts))
-    doc_hashes_used = [doc_hashes[i] for i in processed_data['valid_indices']]
-    processed_data['doc_hashes'] = doc_hashes_used
     
     # Store the processed data
     store_preprocessed_documents(session, corpus_name, processed_data)
@@ -496,9 +589,12 @@ def preprocess_twitter_financial(session: Session, preprocessing_params: dict = 
 if __name__ == '__main__':
     # Configure logging
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+
+    # direct logging to file
+    logging.getLogger().addHandler(logging.FileHandler("preprocessing.log"))
     
     # Load configuration
     config = cfg.load_config_from_env()
