@@ -5,7 +5,6 @@ These functions handle the preprocessing and storage of different corpora using 
 import hashlib
 import json
 import logging
-from typing import Optional, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -19,7 +18,7 @@ def hash_text(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()    
 
 
-def store_corpus_documents(session: Session, corpus_name: str, texts: list[str], description: Optional[str] = None):
+def store_corpus_documents(session: Session, corpus_name: str, texts: list[str], description: str | None = None):
     """
     Store a corpus and its documents in the database using a delete-write pattern for idempotency.
     
@@ -122,7 +121,7 @@ def store_corpus_documents(session: Session, corpus_name: str, texts: list[str],
     logging.info(f"  Total documents in corpus: {docs_existing + docs_inserted}")
 
 
-def ingest_newsgroups(session: Session, subset: Optional[int] = None, description: Optional[str] = None):
+def ingest_newsgroups(session: Session, subset: int | None = None, description: str | None = None):
     """
     Ingest the 20 Newsgroups dataset into the database.
     
@@ -149,7 +148,7 @@ def ingest_newsgroups(session: Session, subset: Optional[int] = None, descriptio
     store_corpus_documents(session, "newsgroups", texts, description)
 
 
-def ingest_wikipedia(session: Session, file_path: str, subset: Optional[int] = None, description: Optional[str] = None):
+def ingest_wikipedia(session: Session, file_path: str, subset: int | None = None, description: str | None = None):
     """
     Ingest Wikipedia articles from a JSON Lines file.
     
@@ -175,7 +174,7 @@ def ingest_wikipedia(session: Session, file_path: str, subset: Optional[int] = N
     store_corpus_documents(session, "wikipedia_sample", texts, description)
 
 
-def ingest_imdb(session: Session, subset: Optional[int] = None, description: Optional[str] = None):
+def ingest_imdb(session: Session, subset: int | None = None, description: str | None = None):
     """
     Ingest IMDB movie reviews dataset.
     
@@ -201,7 +200,7 @@ def ingest_imdb(session: Session, subset: Optional[int] = None, description: Opt
     store_corpus_documents(session, "imdb_reviews", texts, description)
 
 
-def ingest_trec(session: Session, subset: Optional[int] = None, description: Optional[str] = None):
+def ingest_trec(session: Session, subset: int | None = None, description: str | None = None):
     """
     Ingest TREC question classification dataset.
     
@@ -227,7 +226,7 @@ def ingest_trec(session: Session, subset: Optional[int] = None, description: Opt
     store_corpus_documents(session, "trec_questions", texts, description)
 
 
-def ingest_twitter_financial(session: Session, subset: Optional[int] = None, description: Optional[str] = None):
+def ingest_twitter_financial(session: Session, subset: int | None = None, description: str | None = None):
     """
     Ingest Twitter Financial News Topic dataset.
     

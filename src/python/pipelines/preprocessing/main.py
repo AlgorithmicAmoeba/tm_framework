@@ -6,7 +6,7 @@ import hashlib
 import re
 import string
 import logging
-from typing import Optional, List, Dict, Any, Set
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -43,8 +43,8 @@ class TextPreprocessor:
     
     def __init__(
             self,
-            top_n: Optional[int] = None,
-            min_words_per_document: Optional[int] = None,
+            top_n: int | None = None,
+            min_words_per_document: int | None = None,
             min_df: float = 0.0,
             max_df: float = 1.0,
             min_chars: int = 3,
@@ -97,7 +97,7 @@ class TextPreprocessor:
         else:
             self._spacy_model = None
 
-    def process_corpus(self, corpus_name: str, texts: List[str]) -> Dict[str, Any]:
+    def process_corpus(self, corpus_name: str, texts: list[str]) -> dict[str, Any]:
         """
         Process a corpus of texts.
         
@@ -168,7 +168,7 @@ class TextPreprocessor:
             'raw_texts': raw_texts,
         }
     
-    def _clean_texts(self, texts: List[str]) -> List[str]:
+    def _clean_texts(self, texts: list[str]) -> list[str]:
         """Clean and process texts."""
         # Pre-processing: URL removal
         if self._remove_urls:
@@ -217,7 +217,7 @@ class TextPreprocessor:
         return texts
 
 
-def store_preprocessed_documents(session: Session, corpus_name: str, processed_data: Dict[str, Any]):
+def store_preprocessed_documents(session: Session, corpus_name: str, processed_data: dict[str, Any]):
     """
     Store preprocessed documents and vocabulary in the database.
     Uses a delete-insert pattern for idempotency.
@@ -495,7 +495,7 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
         logging.info(f"  TF-IDF vectors deleted: {tfidf_deleted}")
 
 
-def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: dict = None):
+def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: dict[str, Any] | None = None):
     """
     Preprocess documents for a specified corpus.
     
@@ -558,27 +558,27 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     logging.info(f"Vocabulary: {filtered_vocab} of {original_vocab} ({filtered_vocab/original_vocab*100:.1f}%)")
 
 
-def preprocess_newsgroups(session: Session, preprocessing_params: dict = None):
+def preprocess_newsgroups(session: Session, preprocessing_params: dict[str, Any] | None = None):
     """Preprocess 20 Newsgroups corpus."""
     preprocess_corpus(session, "newsgroups", preprocessing_params)
 
 
-def preprocess_wikipedia(session: Session, preprocessing_params: dict = None):
+def preprocess_wikipedia(session: Session, preprocessing_params: dict[str, Any] | None = None):
     """Preprocess Wikipedia corpus."""
     preprocess_corpus(session, "wikipedia_sample", preprocessing_params)
 
 
-def preprocess_imdb(session: Session, preprocessing_params: dict = None):
+def preprocess_imdb(session: Session, preprocessing_params: dict[str, Any] | None = None):
     """Preprocess IMDB reviews corpus."""
     preprocess_corpus(session, "imdb_reviews", preprocessing_params)
 
 
-def preprocess_trec(session: Session, preprocessing_params: dict = None):
+def preprocess_trec(session: Session, preprocessing_params: dict[str, Any] | None = None):
     """Preprocess TREC questions corpus."""
     preprocess_corpus(session, "trec_questions", preprocessing_params)
 
 
-def preprocess_twitter_financial(session: Session, preprocessing_params: dict = None):
+def preprocess_twitter_financial(session: Session, preprocessing_params: dict[str, Any] | None = None):
     """Preprocess Twitter financial news corpus."""
     preprocess_corpus(session, "twitter-financial-news", preprocessing_params)
 
