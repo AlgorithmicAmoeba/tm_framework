@@ -10,11 +10,8 @@ from typing import Optional, List, Dict, Any, Set
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 import spacy
-import tqdm
-import json
 
 from database import get_session
 import configuration as cfg
