@@ -52,14 +52,14 @@ class DocumentChunk:
             self.chunk_hash = hash_text(self.content)
     
     @property
-    def db_key(self) -> tuple[str, str, int, int]:
+    def db_key(self) -> tuple[str, str, str]:
         """
         Get the unique identifier tuple for database operations.
         
         Returns:
-            Tuple of (raw_document_hash, corpus_name, chunk_start, token_count)
+            Tuple of (raw_document_hash, corpus_name, chunk_hash)
         """
-        return (self.raw_document_hash, self.corpus_name, self.chunk_start, self.token_count)
+        return (self.raw_document_hash, self.corpus_name, self.chunk_hash)
     
     def to_dict(self) -> dict[str, Any]:
         """
@@ -152,7 +152,7 @@ def store_chunked_documents(
     # Get existing chunks to track what's already processed
     existing_chunks = session.execute(
         text("""
-            SELECT raw_document_hash, corpus_name, chunk_start, token_count 
+            SELECT raw_document_hash, corpus_name, chunk_hash 
             FROM pipeline.chunked_document
             WHERE corpus_name = :corpus_name
         """),
@@ -161,7 +161,7 @@ def store_chunked_documents(
     
     # Create a set of tuples for fast lookup
     existing_chunks_set = {
-        (row[0], row[1], row[2], row[3]): False 
+        (row[0], row[1], row[2]): False 
         for row in existing_chunks
     }
     
@@ -187,10 +187,11 @@ def store_chunked_documents(
                 INSERT INTO pipeline.chunked_document 
                 (raw_document_hash, corpus_name, chunk_hash, content, chunk_start, token_count)
                 VALUES (:raw_document_hash, :corpus_name, :chunk_hash, :content, :chunk_start, :token_count)
-                ON CONFLICT (corpus_name, raw_document_hash, chunk_start, token_count) 
+                ON CONFLICT (corpus_name, raw_document_hash, chunk_hash) 
                 DO UPDATE SET 
-                    chunk_hash = EXCLUDED.chunk_hash,
-                    content = EXCLUDED.content
+                    content = EXCLUDED.content,
+                    chunk_start = EXCLUDED.chunk_start,
+                    token_count = EXCLUDED.token_count
             """)
             
             # Convert the chunk to a dictionary for the query parameters
@@ -208,13 +209,11 @@ def store_chunked_documents(
         if processed:
             continue
         
-        assert False, "This should not happen"
         delete_chunk_query = text("""
             DELETE FROM pipeline.chunked_document
             WHERE raw_document_hash = :raw_document_hash 
             AND corpus_name = :corpus_name 
-            AND chunk_start = :chunk_start
-            AND token_count = :token_count
+            AND chunk_hash = :chunk_hash
         """)
         
         session.execute(
@@ -222,8 +221,7 @@ def store_chunked_documents(
             {
                 "raw_document_hash": chunk_key[0],
                 "corpus_name": chunk_key[1],
-                "chunk_start": chunk_key[2],
-                "token_count": chunk_key[3]
+                "chunk_hash": chunk_key[2]
             }
         )
         chunks_deleted += 1
@@ -302,8 +300,6 @@ def chunk_corpus(
     # Print statistics
     logging.info(f"Chunking complete for corpus: {corpus_name}")
     logging.info(f"Documents processed: {doc_count}")
-    logging.info(f"Chunks created: {len(all_chunks)}")
-    logging.info(f"Avg. chunks per document: {len(all_chunks)/max(1, doc_count):.2f}")
 
 
 def chunk_newsgroups(session: Session, max_tokens: int):
