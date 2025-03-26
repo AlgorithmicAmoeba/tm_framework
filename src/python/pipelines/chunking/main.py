@@ -4,6 +4,7 @@ These functions handle document chunking for further processing or embedding.
 """
 import hashlib
 import logging
+import dataclasses
 from typing import Any
 
 import tiktoken
@@ -35,12 +36,54 @@ def color_logging_text(message: str, color: str) -> str:
     return f"\033[{color_code}m{message}\033[0m"
 
 
+@dataclasses.dataclass
+class DocumentChunk:
+    """Represents a chunk of a document with metadata."""
+    raw_document_hash: str
+    corpus_name: str
+    content: str
+    chunk_start: int
+    token_count: int
+    chunk_hash: str = ""
+    
+    def __post_init__(self) -> None:
+        """Compute chunk hash if not provided."""
+        if not self.chunk_hash:
+            self.chunk_hash = hash_text(self.content)
+    
+    @property
+    def db_key(self) -> tuple[str, str, int, int]:
+        """
+        Get the unique identifier tuple for database operations.
+        
+        Returns:
+            Tuple of (raw_document_hash, corpus_name, chunk_start, token_count)
+        """
+        return (self.raw_document_hash, self.corpus_name, self.chunk_start, self.token_count)
+    
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Convert to dictionary for database operations.
+        
+        Returns:
+            Dictionary representation of the chunk
+        """
+        return {
+            "raw_document_hash": self.raw_document_hash,
+            "corpus_name": self.corpus_name,
+            "chunk_hash": self.chunk_hash,
+            "content": self.content,
+            "chunk_start": self.chunk_start,
+            "token_count": self.token_count
+        }
+
+
 class DocumentChunker:
     """Document chunking class with configurable options."""
     
     def __init__(
             self,
-            max_tokens: int = 8190,
+            max_tokens: int,
             tokenizer_name: str = "cl100k_base"
         ):
         """
@@ -56,7 +99,7 @@ class DocumentChunker:
         # Initialize tokenizer
         self._tokenizer = tiktoken.get_encoding(tokenizer_name)
     
-    def chunk_first_n_tokens(self, doc_hash: str, corpus_name: str, content: str) -> list[dict[str, Any]]:
+    def chunk_first_n_tokens(self, doc_hash: str, corpus_name: str, content: str) -> list[DocumentChunk]:
         """
         Create a single chunk with the first N tokens of a document.
         
@@ -66,7 +109,7 @@ class DocumentChunker:
             content: Document content
             
         Returns:
-            List containing a single chunk dictionary
+            List containing a single DocumentChunk
         """
         # Tokenize the document content
         tokens = self._tokenizer.encode(content)
@@ -78,30 +121,31 @@ class DocumentChunker:
         # Decode back to text
         chunk_text = self._tokenizer.decode(tokens)
         
-        # Create a hash for the chunk
-        chunk_hash = hash_text(chunk_text)
-        
-        # Create a chunk dictionary
-        chunk = {
-            "raw_document_hash": doc_hash,
-            "corpus_name": corpus_name,
-            "chunk_hash": chunk_hash,
-            "content": chunk_text,
-            "chunk_start": 0,
-            "token_count": len(tokens)
-        }
+        # Create a DocumentChunk
+        chunk = DocumentChunk(
+            raw_document_hash=doc_hash,
+            corpus_name=corpus_name,
+            content=chunk_text,
+            chunk_start=0,
+            token_count=len(tokens)
+        )
         
         return [chunk]
 
 
-def store_chunked_documents(session: Session, chunked_data: list[dict[str, Any]]):
+def store_chunked_documents(
+    session: Session,
+    chunked_data: list[DocumentChunk],
+    corpus_name: str
+):
     """
     Store chunked documents in the database.
     Uses upsert pattern for idempotency.
     
     Args:
         session: Database session
-        chunked_data: List of chunk dictionaries
+        chunked_data: List of DocumentChunk objects
+        corpus_name: Name of the corpus
     """
     logging.info(f"Storing {len(chunked_data)} chunked documents")
     
@@ -110,7 +154,9 @@ def store_chunked_documents(session: Session, chunked_data: list[dict[str, Any]]
         text("""
             SELECT raw_document_hash, corpus_name, chunk_start, token_count 
             FROM pipeline.chunked_document
-        """)
+            WHERE corpus_name = :corpus_name
+        """),
+        {"corpus_name": corpus_name}
     ).fetchall()
     
     # Create a set of tuples for fast lookup
@@ -130,16 +176,9 @@ def store_chunked_documents(session: Session, chunked_data: list[dict[str, Any]]
         batch_inserts = 0
         
         for chunk in batch_chunks:
-            chunk_key = (
-                chunk["raw_document_hash"], 
-                chunk["corpus_name"], 
-                chunk["chunk_start"],
-                chunk["token_count"]
-            )
-            
-            # Mark as processed if already exists
-            if chunk_key in existing_chunks_set:
-                existing_chunks_set[chunk_key] = True
+            # Use the db_key property to get the unique key
+            if chunk.db_key in existing_chunks_set:
+                existing_chunks_set[chunk.db_key] = True
                 chunks_existing += 1
                 continue
             
@@ -154,17 +193,8 @@ def store_chunked_documents(session: Session, chunked_data: list[dict[str, Any]]
                     content = EXCLUDED.content
             """)
             
-            session.execute(
-                insert_chunk_query,
-                {
-                    "raw_document_hash": chunk["raw_document_hash"],
-                    "corpus_name": chunk["corpus_name"],
-                    "chunk_hash": chunk["chunk_hash"],
-                    "content": chunk["content"],
-                    "chunk_start": chunk["chunk_start"],
-                    "token_count": chunk["token_count"]
-                }
-            )
+            # Convert the chunk to a dictionary for the query parameters
+            session.execute(insert_chunk_query, chunk.to_dict())
             chunks_inserted += 1
             batch_inserts += 1
         
@@ -178,6 +208,7 @@ def store_chunked_documents(session: Session, chunked_data: list[dict[str, Any]]
         if processed:
             continue
         
+        assert False, "This should not happen"
         delete_chunk_query = text("""
             DELETE FROM pipeline.chunked_document
             WHERE raw_document_hash = :raw_document_hash 
@@ -225,7 +256,7 @@ def store_chunked_documents(session: Session, chunked_data: list[dict[str, Any]]
 def chunk_corpus(
         session: Session, 
         corpus_name: str, 
-        max_tokens: int = 512,
+        max_tokens: int,
         source_table: str = "pipeline.used_raw_document"
     ):
     """
@@ -266,7 +297,7 @@ def chunk_corpus(
         all_chunks.extend(chunks)
     
     # Store the chunked documents
-    store_chunked_documents(session, all_chunks)
+    store_chunked_documents(session, all_chunks, corpus_name)
     
     # Print statistics
     logging.info(f"Chunking complete for corpus: {corpus_name}")
@@ -275,27 +306,27 @@ def chunk_corpus(
     logging.info(f"Avg. chunks per document: {len(all_chunks)/max(1, doc_count):.2f}")
 
 
-def chunk_newsgroups(session: Session, max_tokens: int = 512):
+def chunk_newsgroups(session: Session, max_tokens: int):
     """Chunk 20 Newsgroups corpus."""
     chunk_corpus(session, "newsgroups", max_tokens)
 
 
-def chunk_wikipedia(session: Session, max_tokens: int = 512):
+def chunk_wikipedia(session: Session, max_tokens: int):
     """Chunk Wikipedia corpus."""
     chunk_corpus(session, "wikipedia_sample", max_tokens)
 
 
-def chunk_imdb(session: Session, max_tokens: int = 512):
+def chunk_imdb(session: Session, max_tokens: int):
     """Chunk IMDB reviews corpus."""
     chunk_corpus(session, "imdb_reviews", max_tokens)
 
 
-def chunk_trec(session: Session, max_tokens: int = 512):
+def chunk_trec(session: Session, max_tokens: int):
     """Chunk TREC questions corpus."""
     chunk_corpus(session, "trec_questions", max_tokens)
 
 
-def chunk_twitter_financial(session: Session, max_tokens: int = 512):
+def chunk_twitter_financial(session: Session, max_tokens: int):
     """Chunk Twitter financial news corpus."""
     chunk_corpus(session, "twitter-financial-news", max_tokens)
 
@@ -314,28 +345,24 @@ if __name__ == '__main__':
     # Create database session
     with get_session(db_config) as session:
         # Define corpus-specific chunking parameters
-        newsgroups_tokens = 512
-        wikipedia_tokens = 1024
-        imdb_tokens = 512
-        trec_tokens = 256
-        twitter_tokens = 256
+        max_tokens = 8190
         
         # Run chunking for each corpus
         logging.info("Starting chunking pipelines...")
         
         logging.info("Chunking newsgroups corpus...")
-        chunk_newsgroups(session, newsgroups_tokens)
+        chunk_newsgroups(session, max_tokens=max_tokens)
         
         logging.info("Chunking Wikipedia corpus...")
-        chunk_wikipedia(session, wikipedia_tokens)
+        chunk_wikipedia(session, max_tokens=max_tokens)
         
         logging.info("Chunking IMDB reviews corpus...")
-        chunk_imdb(session, imdb_tokens)
+        chunk_imdb(session, max_tokens=max_tokens)
         
         logging.info("Chunking TREC questions corpus...")
-        chunk_trec(session, trec_tokens)
+        chunk_trec(session, max_tokens=max_tokens)
         
         logging.info("Chunking Twitter financial news corpus...")
-        chunk_twitter_financial(session, twitter_tokens)
+        chunk_twitter_financial(session, max_tokens=max_tokens)
         
         logging.info("All chunking pipelines completed successfully.")
