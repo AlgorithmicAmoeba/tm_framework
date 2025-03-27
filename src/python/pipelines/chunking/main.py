@@ -265,6 +265,9 @@ def chunk_corpus(
         corpus_name: Name of the corpus to chunk
         max_tokens: Maximum number of tokens per chunk
         source_table: Table to fetch documents from
+        
+    Returns:
+        Tuple of (original_document_count, chunk_count, average_chunks_per_doc)
     """
     logging.info(f"Starting chunking for corpus: {corpus_name}")
     
@@ -283,7 +286,7 @@ def chunk_corpus(
     
     if not docs:
         logging.warning(f"No documents found for corpus: {corpus_name}")
-        return
+        return 0, 0, 0
     
     doc_count = len(docs)
     logging.info(f"Found {doc_count} documents for corpus: {corpus_name}")
@@ -297,9 +300,17 @@ def chunk_corpus(
     # Store the chunked documents
     store_chunked_documents(session, all_chunks, corpus_name)
     
+    # Calculate statistics
+    chunk_count = len(all_chunks)
+    avg_chunks_per_doc = chunk_count / doc_count if doc_count > 0 else 0
+    
     # Print statistics
     logging.info(f"Chunking complete for corpus: {corpus_name}")
     logging.info(f"Documents processed: {doc_count}")
+    logging.info(f"Total chunks created: {chunk_count}")
+    logging.info(f"Average chunks per document: {avg_chunks_per_doc:.2f}")
+    
+    return doc_count, chunk_count, avg_chunks_per_doc
 
 
 def chunk_newsgroups(session: Session, max_tokens: int):

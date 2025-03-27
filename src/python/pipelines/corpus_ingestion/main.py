@@ -27,6 +27,9 @@ def store_corpus_documents(session: Session, corpus_name: str, texts: list[str],
         corpus_name: Name of the corpus
         texts: List of document texts
         description: Optional description of the corpus
+        
+    Returns:
+        The number of documents in the corpus after processing
     """
     # Insert or update corpus using ON CONFLICT
     upsert_corpus_query = text("""
@@ -114,11 +117,15 @@ def store_corpus_documents(session: Session, corpus_name: str, texts: list[str],
 
     session.commit()
     
+    total_documents = docs_existing + docs_inserted
+    
     logging.info(f"Corpus '{corpus_name}' processing complete:")
     logging.info(f"  Documents already existing: {docs_existing}")
     logging.info(f"  Documents newly inserted: {docs_inserted}")
     logging.info(f"  Documents deleted: {docs_deleted}")
-    logging.info(f"  Total documents in corpus: {docs_existing + docs_inserted}")
+    logging.info(f"  Total documents in corpus: {total_documents}")
+    
+    return total_documents
 
 
 def ingest_newsgroups(session: Session, subset: int | None = None, description: str | None = None):
@@ -129,6 +136,9 @@ def ingest_newsgroups(session: Session, subset: int | None = None, description: 
         session: Database session
         subset: Optional number of documents to ingest
         description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
     """
     from sklearn.datasets import fetch_20newsgroups
     
@@ -145,7 +155,7 @@ def ingest_newsgroups(session: Session, subset: int | None = None, description: 
     if description is None:
         description = "20 Newsgroups dataset - collection of newsgroup documents"
     
-    store_corpus_documents(session, "newsgroups", texts, description)
+    return store_corpus_documents(session, "newsgroups", texts, description)
 
 
 def ingest_wikipedia(session: Session, file_path: str, subset: int | None = None, description: str | None = None):
@@ -157,6 +167,9 @@ def ingest_wikipedia(session: Session, file_path: str, subset: int | None = None
         file_path: Path to the JSONL file containing Wikipedia articles
         subset: Optional number of documents to ingest
         description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
     """
     # Read JSON Lines file
     texts = []
@@ -171,7 +184,7 @@ def ingest_wikipedia(session: Session, file_path: str, subset: int | None = None
     if description is None:
         description = f"Wikipedia sample articles from {file_path}"
     
-    store_corpus_documents(session, "wikipedia_sample", texts, description)
+    return store_corpus_documents(session, "wikipedia_sample", texts, description)
 
 
 def ingest_imdb(session: Session, subset: int | None = None, description: str | None = None):
@@ -182,6 +195,9 @@ def ingest_imdb(session: Session, subset: int | None = None, description: str | 
         session: Database session
         subset: Optional number of documents to ingest
         description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
     """
     from datasets import load_dataset
     
@@ -197,7 +213,7 @@ def ingest_imdb(session: Session, subset: int | None = None, description: str | 
     if description is None:
         description = "IMDB movie reviews dataset for sentiment analysis"
     
-    store_corpus_documents(session, "imdb_reviews", texts, description)
+    return store_corpus_documents(session, "imdb_reviews", texts, description)
 
 
 def ingest_trec(session: Session, subset: int | None = None, description: str | None = None):
@@ -208,6 +224,9 @@ def ingest_trec(session: Session, subset: int | None = None, description: str | 
         session: Database session
         subset: Optional number of documents to ingest
         description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
     """
     from datasets import load_dataset
     
@@ -223,7 +242,7 @@ def ingest_trec(session: Session, subset: int | None = None, description: str | 
     if description is None:
         description = "TREC question classification dataset"
     
-    store_corpus_documents(session, "trec_questions", texts, description)
+    return store_corpus_documents(session, "trec_questions", texts, description)
 
 
 def ingest_twitter_financial(session: Session, subset: int | None = None, description: str | None = None):
@@ -234,6 +253,9 @@ def ingest_twitter_financial(session: Session, subset: int | None = None, descri
         session: Database session
         subset: Optional number of documents to ingest
         description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
     """
     import pandas as pd
     
@@ -248,7 +270,7 @@ def ingest_twitter_financial(session: Session, subset: int | None = None, descri
     if description is None:
         description = "Twitter Financial News Topic dataset"
     
-    store_corpus_documents(session, "twitter-financial-news", texts, description)
+    return store_corpus_documents(session, "twitter-financial-news", texts, description)
 
 
 if __name__ == '__main__':

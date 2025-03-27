@@ -503,6 +503,9 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
         session: Database session
         corpus_name: Name of the corpus to preprocess
         preprocessing_params: Dictionary of preprocessing parameters
+        
+    Returns:
+        Tuple of (vocabulary_size, document_count)
     """
     logging.info(f"Starting preprocessing for corpus: {corpus_name}")
     
@@ -532,7 +535,7 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     
     if not docs:
         logging.warning(f"No documents found for corpus: {corpus_name}")
-        return
+        return 0, 0
     
     doc_hashes, texts = zip(*docs)
     original_doc_count = len(texts)
@@ -556,6 +559,8 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     logging.info(f"Preprocessing complete for corpus: {corpus_name}")
     logging.info(f"Documents: {filtered_count} of {original_count} ({filtered_count/original_count*100:.1f}%)")
     logging.info(f"Vocabulary: {filtered_vocab} of {original_vocab} ({filtered_vocab/original_vocab*100:.1f}%)")
+    
+    return filtered_vocab, filtered_count
 
 
 def preprocess_newsgroups(session: Session, preprocessing_params: dict[str, Any] | None = None):
