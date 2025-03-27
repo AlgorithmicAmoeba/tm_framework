@@ -38,3 +38,8 @@ package = false
 [[tool.uv.index]]
 name = "pypi"
 url = "https://pypi.org/simple"
+
+
+[tool.dagster]
+module_name = "dagster_pipelines.definitions"
+code_location_name = "src/python"
