@@ -52,14 +52,14 @@ def find_embedding_jobs(
     
     # Find source documents that need embedding
     source_query = text(f"""
-        SELECT c.corpus_name, c.chunk_hash, c.content
+        SELECT c.chunk_hash, c.content
         FROM {source_table} c
-        LEFT JOIN pipeline.embedding_jobs j ON 
-            c.id = j.chunk_id AND j.model_name = :model_name
+        LEFT JOIN pipeline.embedding_job j ON 
+            c.chunk_hash = j.chunk_hash
         WHERE j.id IS NULL
     """)
     
-    all_chunks = session.execute(source_query, {"model_name": model_name}).mappings().fetchall()
+    all_chunks = session.execute(source_query).mappings().fetchall()
     
     # Filter out chunks that already exist in cache
     new_chunks = [
@@ -69,35 +69,38 @@ def find_embedding_jobs(
     
     if not new_chunks:
         logging.info("No new chunks found that need embeddings")
-        return 0, len(cache_doc_hashes)
+        return 0
     
     # Count existing jobs
     existing_jobs_query = text("""
-        SELECT COUNT(*)
-        FROM pipeline.embedding_jobs
+        SELECT chunk_hash
+        FROM pipeline.embedding_job
         WHERE model_name = :model_name
     """)
-    
-    existing_count = session.execute(
+
+    existing_jobs = session.execute(
         existing_jobs_query, 
         {"model_name": model_name}
-    ).scalar() or 0
+    ).scalars().fetchall()
+
+    existing_jobs = set(existing_jobs)
+    existing_count = len(existing_jobs)
     
     # Create new jobs
     jobs_created = 0
-    
-        
     for chunk in new_chunks:
+        if chunk["chunk_hash"] in existing_jobs:
+            logging.info(f"Chunk {chunk['chunk_hash']} already has an embedding job")
+            continue
         # Create job entry
         insert_job_query = text("""
-            INSERT INTO pipeline.embedding_jobs 
-            (corpus_name, chunk_hash, chunk_content, model_name,)
-            VALUES (:corpus_name, :chunk_hash, :chunk_content, :model_name)
-            ON CONFLICT (chunk_id, model_name) DO NOTHING
+            INSERT INTO pipeline.embedding_job
+            (chunk_hash, chunk_content, model_name)
+            VALUES (:chunk_hash, :chunk_content, :model_name)
+            ON CONFLICT (chunk_hash) DO NOTHING
         """)
         
         session.execute(insert_job_query, {
-            "corpus_name": chunk["corpus_name"],
             "chunk_hash": chunk["chunk_hash"],
             "chunk_content": chunk["content"],
             "model_name": model_name
@@ -183,8 +186,8 @@ def main():
     
     # Path to DuckDB cache
     cache_db_path = str(config.get_data_path() / "embeddings" / "cache.db")
-    cache_table = "pipeline.embedding_jobs"
-    source_table = "pipeline.document_chunks"
+    cache_table = "document"
+    source_table = "pipeline.chunked_document"
     
     # Create database session
     with get_session(db_config) as session:
