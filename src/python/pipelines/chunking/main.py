@@ -2,7 +2,6 @@
 Chunking pipeline for document corpora.
 These functions handle document chunking for further processing or embedding.
 """
-import hashlib
 import logging
 import dataclasses
 from typing import Any
@@ -13,27 +12,7 @@ from sqlalchemy.orm import Session
 
 from database import get_session
 import configuration as cfg
-
-
-def hash_text(text: str) -> str:
-    """Generate a hash for the document content."""
-    return hashlib.md5(text.encode('utf-8')).hexdigest()
-
-
-def color_logging_text(message: str, color: str) -> str:
-    """Change the color of the logging message."""
-    color_map = {
-        'red': '31',
-        'green': '32',
-        'yellow': '33',
-        'blue': '34',
-        'purple': '35',
-        'cyan': '36',
-        'white': '37'
-    }
-    
-    color_code = color_map.get(color, '37')
-    return f"\033[{color_code}m{message}\033[0m"
+from shared_code import color_logging_text, hash_string
 
 
 @dataclasses.dataclass
@@ -49,7 +28,7 @@ class DocumentChunk:
     def __post_init__(self) -> None:
         """Compute chunk hash if not provided."""
         if not self.chunk_hash:
-            self.chunk_hash = hash_text(self.content)
+            self.chunk_hash = hash_string(self.content)
     
     @property
     def db_key(self) -> tuple[str, str, str]:

@@ -2,7 +2,6 @@
 Preprocessing pipeline functions for document corpora.
 These functions handle text preprocessing, tokenization, and TF-IDF computation using raw SQL.
 """
-import hashlib
 import re
 import string
 import logging
@@ -15,27 +14,10 @@ import spacy
 
 from database import get_session
 import configuration as cfg
+from shared_code import color_logging_text, hash_string
 
 
-def hash_text(text: str) -> str:
-    """Generate a hash for the document content."""
-    return hashlib.md5(text.encode('utf-8')).hexdigest()
 
-
-def color_logging_text(message: str, color: str) -> str:
-    """Change the color of the logging message."""
-    color_map = {
-        'red': '31',
-        'green': '32',
-        'yellow': '33',
-        'blue': '34',
-        'purple': '35',
-        'cyan': '36',
-        'white': '37'
-    }
-    
-    color_code = color_map.get(color, '37')
-    return f"\033[{color_code}m{message}\033[0m"
 
 
 class TextPreprocessor:
@@ -109,7 +91,7 @@ class TextPreprocessor:
             Dictionary containing processed data
         """
         # Generate document hashes for reference
-        doc_hashes = [hash_text(text) for text in texts]
+        doc_hashes = [hash_string(text) for text in texts]
         
         # Clean and tokenize texts
         cleaned_texts = self._clean_texts(texts)
@@ -302,7 +284,7 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
         doc_hash = doc_hashes[i]
         content = cleaned_texts[i]
         raw_content = raw_texts[i]
-        content_hash = hash_text(content)
+        content_hash = hash_string(content)
         
         # Mark document as processed if it exists
         if doc_hash in existing_docs_dict:

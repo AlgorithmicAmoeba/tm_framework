@@ -2,7 +2,6 @@
 Corpus ingestion pipeline functions for various datasets.
 These functions handle the preprocessing and storage of different corpora using raw SQL.
 """
-import hashlib
 import json
 import logging
 
@@ -11,11 +10,7 @@ from sqlalchemy.orm import Session
 
 from database import get_session
 import configuration as cfg
-
-
-def hash_text(text: str) -> str:
-    """Generate a hash for the document content."""
-    return hashlib.md5(text.encode('utf-8')).hexdigest()    
+from shared_code import hash_string  
 
 
 def store_corpus_documents(session: Session, corpus_name: str, texts: list[str], description: str | None = None):
@@ -66,7 +61,7 @@ def store_corpus_documents(session: Session, corpus_name: str, texts: list[str],
         batch_inserts = 0
         
         for batch_text in batch_texts:
-            content_hash = hash_text(batch_text)
+            content_hash = hash_string(batch_text)
 
             # Skip if the document already exists
             if content_hash in existing_hashes:
