@@ -126,6 +126,32 @@ def find_embedding_jobs(
     return jobs_created
 
 
+def create_duckdb_cache_table(
+    duckdb_cache_session: DuckDBPyConnection,
+    cache_table: str
+) -> None:
+    """
+    Create the DuckDB cache table if it doesn't exist.
+    
+    Args:
+        duckdb_cache_session: DuckDB connection for cache operations
+        cache_table: Cache table name to create
+    """
+    create_table_query = f"""
+        CREATE TABLE IF NOT EXISTS {cache_table} (
+            document_hash VARCHAR PRIMARY KEY,
+            embedding BLOB
+        )
+    """
+    
+    try:
+        duckdb_cache_session.execute(create_table_query)
+        logging.info(f"Cache table {cache_table} created")
+    except Exception as e:
+        logging.error(f"Error creating cache table {cache_table}: {str(e)}")
+        raise
+
+
 def open_duckdb_connection(db_path: str) -> DuckDBPyConnection:
     """
     Open a connection to the DuckDB database.
@@ -157,6 +183,8 @@ def main():
     
     # Path to DuckDB cache
     cache_db_path = str(config.get_data_path() / "embeddings" / "cache.db")
+    cache_table = "pipeline.embedding_jobs"
+    source_table = "pipeline.document_chunks"
     
     # Create database session
     with get_session(db_config) as session:
@@ -165,11 +193,17 @@ def main():
         
         duckdb_cache_session = open_duckdb_connection(cache_db_path)
 
+        # Create DuckDB cache table if it doesn't exist
+        create_duckdb_cache_table(
+            duckdb_cache_session=duckdb_cache_session,
+            cache_table=cache_table,
+        )
+
         new_jobs = find_embedding_jobs(
             session=session,
             duckdb_cache_session=duckdb_cache_session,
-            source_table="pipeline.document_chunks",
-            cache_table="pipeline.embedding_jobs",
+            source_table=source_table,
+            cache_table=cache_table,
         )
         
         if new_jobs > 0:
