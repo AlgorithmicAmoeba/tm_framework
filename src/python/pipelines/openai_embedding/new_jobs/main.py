@@ -20,7 +20,6 @@ def find_embedding_jobs(
     source_table: str,
     cache_table: str,
     model_name: str = "text-embedding-3-small",
-    batch_size: int = 49_995
 ) -> int:
     """
     Look in the source table for any rows that do not exist in the cache table.
@@ -53,20 +52,19 @@ def find_embedding_jobs(
     
     # Find source documents that need embedding
     source_query = text(f"""
-        SELECT c.id, c.raw_document_hash, c.corpus_name, c.chunk_hash, c.content
+        SELECT c.corpus_name, c.chunk_hash, c.content
         FROM {source_table} c
         LEFT JOIN pipeline.embedding_jobs j ON 
             c.id = j.chunk_id AND j.model_name = :model_name
         WHERE j.id IS NULL
     """)
     
-    result = session.execute(source_query, {"model_name": model_name})
-    all_chunks = [(row[0], row[1], row[2], row[3], row[4]) for row in result]
+    all_chunks = session.execute(source_query, {"model_name": model_name}).mappings().fetchall()
     
     # Filter out chunks that already exist in cache
     new_chunks = [
         chunk for chunk in all_chunks 
-        if chunk[3] not in cache_doc_hashes  # Check if chunk_hash exists in cache
+        if chunk["chunk_hash"] not in cache_doc_hashes  # Check if chunk_hash exists in cache
     ]
     
     if not new_chunks:
@@ -88,34 +86,26 @@ def find_embedding_jobs(
     # Create new jobs
     jobs_created = 0
     
-    for i in range(0, len(new_chunks), batch_size):
-        batch_chunks = new_chunks[i:i+batch_size]
-        batch_inserts = 0
         
-        for chunk_id, raw_doc_hash, corpus_name, chunk_hash, content in batch_chunks:
-            # Create job entry
-            insert_job_query = text("""
-                INSERT INTO pipeline.embedding_jobs 
-                (chunk_id, raw_document_hash, corpus_name, chunk_hash, model_name, status)
-                VALUES (:chunk_id, :raw_document_hash, :corpus_name, :chunk_hash, :model_name, :status)
-                ON CONFLICT (chunk_id, model_name) DO NOTHING
-            """)
-            
-            session.execute(insert_job_query, {
-                "chunk_id": chunk_id,
-                "raw_document_hash": raw_doc_hash,
-                "corpus_name": corpus_name,
-                "chunk_hash": chunk_hash,
-                "model_name": model_name,
-                "status": "pending"
-            })
-            
-            batch_inserts += 1
-            jobs_created += 1
+    for chunk in new_chunks:
+        # Create job entry
+        insert_job_query = text("""
+            INSERT INTO pipeline.embedding_jobs 
+            (corpus_name, chunk_hash, chunk_content, model_name,)
+            VALUES (:corpus_name, :chunk_hash, :chunk_content, :model_name)
+            ON CONFLICT (chunk_id, model_name) DO NOTHING
+        """)
         
-        # Commit after each batch
-        session.commit()
-        logging.debug(f"Processed batch {i//batch_size + 1}, inserted {batch_inserts} jobs")
+        session.execute(insert_job_query, {
+            "corpus_name": chunk["corpus_name"],
+            "chunk_hash": chunk["chunk_hash"],
+            "chunk_content": chunk["content"],
+            "model_name": model_name
+        })
+        
+        jobs_created += 1
+        
+    session.commit()
     
     # Log statistics
     logging.info(f"Embedding job creation complete")

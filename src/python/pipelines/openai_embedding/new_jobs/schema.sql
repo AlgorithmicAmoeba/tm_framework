@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS pipeline.embedding_job (
     corpus_name VARCHAR(255) NOT NULL,
     chunk_hash VARCHAR(255) NOT NULL,
     chunk_content TEXT NOT NULL,
+    model_name VARCHAR(255) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(corpus_name, chunk_hash)
