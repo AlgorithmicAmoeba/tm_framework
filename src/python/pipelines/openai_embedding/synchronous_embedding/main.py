@@ -17,7 +17,7 @@ from shared_code import color_logging_text
 from openai_embeddings.cache import ensure_cache_db, add_to_cache, Chunk
 
 
-async def generate_embedding(client: openai.Client, text: str, model: str) -> List[float]:
+def generate_embedding(client: openai.Client, text: str, model: str) -> List[float]:
     """
     Generate embedding for a single text using OpenAI API.
     
@@ -30,7 +30,7 @@ async def generate_embedding(client: openai.Client, text: str, model: str) -> Li
         Embedding vector as a list of floats
     """
     try:
-        response = await client.embeddings.create(
+        response = client.embeddings.create(
             model=model,
             input=text
         )
@@ -40,11 +40,69 @@ async def generate_embedding(client: openai.Client, text: str, model: str) -> Li
         raise
 
 
+async def process_job(
+    client: openai.Client,
+    job: dict,
+    cache_path: pathlib.Path,
+    model: str,
+    session: Session
+) -> bool:
+    """
+    Process a single embedding job.
+    
+    Args:
+        client: OpenAI API client
+        job: Job dictionary with required fields
+        cache_path: Path to the cache database
+        model: Default model to use if not specified in job
+        session: Database session
+        
+    Returns:
+        True if job was processed successfully, False otherwise
+    """
+    try:
+        # Generate embedding
+        embedding = generate_embedding(
+            client=client,
+            text=job["chunk_content"],
+            model=job["model_name"] or model
+        )
+        
+        # Create chunk object for cache
+        chunk = Chunk(
+            document_hash=job["chunk_hash"],  # Using chunk_hash as document_hash for cache
+            chunk_hash=job["chunk_hash"],
+            chunk_start_index=0,
+            chunk_end_index=len(job["chunk_content"]),
+            corpus_name="embedding_job",  # Using a default corpus name
+            text=job["chunk_content"]
+        )
+        
+        # Add to cache
+        add_to_cache([chunk], [embedding], cache_path)
+        
+        # Delete the processed job
+        delete_query = text("""
+            DELETE FROM pipeline.embedding_job
+            WHERE id = :job_id
+        """)
+        session.execute(delete_query, {"job_id": job["id"]})
+        session.commit()
+        
+        logging.info(f"Processed job {job['id']}")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error processing job {job['id']}: {e}")
+        logging.error("Full stack trace:", exc_info=True)
+        return False
+
+
 async def process_jobs(
     session: Session,
     client: openai.Client,
     cache_path: pathlib.Path,
-    model: str = "text-embedding-3-small",
+    model: str = "text-embedding-3-small"
 ) -> int:
     """
     Process jobs from the embedding_job table and store results in cache.
@@ -77,48 +135,18 @@ async def process_jobs(
     
     logging.info(f"Found {len(jobs)} jobs to process")
     
-    # Process jobs in batches
-    processed_count = 0
-    error_count = 0
+    # Create tasks for all jobs
+    tasks = [
+        process_job(client, job, cache_path, model, session)
+        for job in jobs
+    ]
     
-    for job in jobs:
-        try:
-            # Generate embedding
-            embedding = await generate_embedding(
-                client=client,
-                text=job["chunk_content"],
-                model=job["model_name"] or model
-            )
-            
-            # Create chunk object for cache
-            chunk = Chunk(
-                document_hash=job["chunk_hash"],  # Using chunk_hash as document_hash for cache
-                chunk_hash=job["chunk_hash"],
-                chunk_start_index=0,
-                chunk_end_index=len(job["chunk_content"]),
-                corpus_name="embedding_job",  # Using a default corpus name
-                text=job["chunk_content"]
-            )
-            
-            # Add to cache
-            add_to_cache([chunk], [embedding], cache_path)
-            
-            # Delete the processed job
-            delete_query = text("""
-                DELETE FROM pipeline.embedding_job
-                WHERE id = :job_id
-            """)
-            session.execute(delete_query, {"job_id": job["id"]})
-            
-            processed_count += 1
-            logging.info(f"Processed job {job['id']}")
-            
-        except Exception as e:
-            logging.error(f"Error processing job {job['id']}: {e}")
-            error_count += 1
+    # Process all jobs concurrently
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # Commit changes
-    session.commit()
+    # Count successes and failures
+    processed_count = sum(1 for r in results if r is True)
+    error_count = len(jobs) - processed_count
     
     # Log statistics
     logging.info(f"Job processing complete")
@@ -147,7 +175,7 @@ async def main():
     client = openai.Client(api_key=openai_config.api_key)
     
     # Define cache path
-    cache_path = pathlib.Path(config.get_data_path() / "cache" / "embedding_cache.db")
+    cache_path = pathlib.Path(config.get_data_path() / "embeddings" / "cache.db")
     
     # Create database session
     with get_session(db_config) as session:

@@ -69,31 +69,12 @@ def ensure_cache_db(cache_path: pathlib.Path) -> None:
     
     # Connect to database
     with duckdb.connect(str(cache_path)) as conn:
-        conn.execute("""
-        CREATE SEQUENCE IF NOT EXISTS id_sequence START 1
-        """)
         
         conn.execute("""
         CREATE TABLE IF NOT EXISTS chunk (
-            id INTEGER DEFAULT nextval('id_sequence') PRIMARY KEY,
-            document_hash VARCHAR,              -- Hash of original document
-            chunk_hash VARCHAR UNIQUE,          -- Hash of the chunk text
-            chunk_start_index INTEGER,          -- Start index of chunk in original doc
-            chunk_end_index INTEGER,            -- End index of chunk in original doc
-            corpus_name VARCHAR,                -- Name of the corpus
-            text TEXT,                          -- The chunk text
-            embedding_json VARCHAR,             -- The embedding as JSON
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            document_hash VARCHAR,
+            embedding BLOB
         )
-        """)
-        
-        # Create indexes for faster lookups
-        conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_document_hash ON chunk(document_hash)
-        """)
-        
-        conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_chunk_hash ON chunk(chunk_hash)
         """)
 
 
@@ -122,7 +103,7 @@ def check_cache(
         # Check each chunk
         for chunk in chunks:
             query = """
-            SELECT embedding_json
+            SELECT embedding
             FROM chunk
             WHERE chunk_hash = ?
             """
@@ -172,36 +153,34 @@ def add_to_cache(
         # Add chunk data
         chunk_rows.append({
             'document_hash': chunk.document_hash,
-            'chunk_hash': chunk.chunk_hash,
-            'chunk_start_index': chunk.chunk_start_index,
-            'chunk_end_index': chunk.chunk_end_index,
-            'corpus_name': chunk.corpus_name,
-            'text': chunk.text,
-            'embedding_json': json.dumps(embedding)
+            'embedding': json.dumps(embedding)
         })
     
     # Insert into database
     with duckdb.connect(str(cache_path)) as conn:
         if chunk_rows:
             df_chunks = pd.DataFrame(chunk_rows)
+            # Register the DataFrame with DuckDB
+            conn.register('df_chunks', df_chunks)
             conn.execute("""
-            INSERT OR REPLACE INTO chunk (
-                document_hash, chunk_hash, chunk_start_index, 
-                chunk_end_index, corpus_name, text, embedding_json
+            INSERT INTO document (
+                document_hash, embedding
             )
             SELECT 
-                document_hash, chunk_hash, chunk_start_index, 
-                chunk_end_index, corpus_name, text, embedding_json
+                document_hash, embedding
             FROM df_chunks
+            ON CONFLICT (document_hash) DO UPDATE SET
+                document_hash = EXCLUDED.document_hash,
+                embedding = EXCLUDED.embedding
             """)
-    
+        conn.commit()
     return len(chunk_rows)
 
 
 def get_document_chunks(
     document_hash: str,
     cache_path: pathlib.Path
-) -> list[Chunk]:
+) -> list[list[float]]:
     """
     Get all chunks for a specific document by its hash.
     
@@ -210,7 +189,7 @@ def get_document_chunks(
         cache_path: Path to the cache database
         
     Returns:
-        List of Chunk objects
+        List of embeddings
     """
     ensure_cache_db(cache_path)
     
@@ -219,21 +198,15 @@ def get_document_chunks(
         # Get all chunks for this document
         results = conn.execute("""
         SELECT 
-            document_hash, chunk_hash, chunk_start_index, 
-            chunk_end_index, corpus_name, text, embedding_json
-        FROM chunk
+            document_hash, embedding
+        FROM document
         WHERE document_hash = ?
-        ORDER BY chunk_start_index
         """, [document_hash]).fetchall()
         
         for row in results:
             chunk = Chunk(
                 document_hash=row[0],
-                chunk_hash=row[1],
-                chunk_start_index=row[2],
-                chunk_end_index=row[3],
-                corpus_name=row[4],
-                text=row[5]
+                embedding=json.loads(row[1])
             )
             chunks.append(chunk)
     
@@ -243,7 +216,7 @@ def get_document_chunks(
 def get_chunk_by_hash(
     chunk_hash: str,
     cache_path: pathlib.Path
-) -> Optional[Chunk]:
+) -> Optional[list[float]]:
     """
     Get a specific chunk by its hash.
     
@@ -252,7 +225,7 @@ def get_chunk_by_hash(
         cache_path: Path to the cache database
         
     Returns:
-        Chunk object, or None if not found
+        Embedding, or None if not found
     """
     ensure_cache_db(cache_path)
     
@@ -261,9 +234,7 @@ def get_chunk_by_hash(
         result = conn.execute("""
         SELECT 
             document_hash, chunk_hash, chunk_start_index, 
-            chunk_end_index, corpus_name, text
-        FROM chunk
-        WHERE chunk_hash = ?
+        WHERE document_hash = ?
         """, [chunk_hash]).fetchone()
         
         if result:
@@ -293,44 +264,16 @@ def get_cache_stats(cache_path: pathlib.Path) -> dict[str, Any]:
     
     with duckdb.connect(str(cache_path)) as conn:
         # Get chunk count
-        chunk_count = conn.execute("SELECT COUNT(*) FROM chunk").fetchone()[0]
+        chunk_count = conn.execute("SELECT COUNT(*) FROM document").fetchone()[0]
         
         # Get unique document count
         doc_count = conn.execute("""
-        SELECT COUNT(DISTINCT document_hash) FROM chunk
-        """).fetchone()[0]
-        
-        # Get average chunks per document
-        avg_chunks = conn.execute("""
-        SELECT AVG(chunk_count) FROM (
-            SELECT document_hash, COUNT(*) as chunk_count 
-            FROM chunk GROUP BY document_hash
-        )
-        """).fetchone()[0]
-        
-        # Get total size
-        chunk_size = conn.execute("""
-        SELECT SUM(LENGTH(document_hash) + LENGTH(chunk_hash) + LENGTH(text) + LENGTH(embedding_json) + LENGTH(corpus_name)) 
-        FROM chunk
-        """).fetchone()[0] or 0
-        
-        # Get oldest and newest entries
-        oldest_chunk = conn.execute("""
-        SELECT MIN(created_at) FROM chunk
-        """).fetchone()[0]
-        
-        newest_chunk = conn.execute("""
-        SELECT MAX(created_at) FROM chunk
+        SELECT COUNT(DISTINCT document_hash) FROM document
         """).fetchone()[0]
     
     return {
         "total_documents": doc_count,
         "total_chunks": chunk_count,
-        "avg_chunks_per_document": float(avg_chunks) if avg_chunks else 0,
-        "chunk_size_bytes": chunk_size,
-        "total_size_bytes": chunk_size,
-        "oldest_chunk": str(oldest_chunk) if oldest_chunk else None,
-        "newest_chunk": str(newest_chunk) if newest_chunk else None
     }
 
 
@@ -346,5 +289,5 @@ if __name__ == "__main__":
             table = table[0]
             print(session.execute(f"DESCRIBE {table}").fetch_df())
 
-        # get 1 from chunk table
-        print(session.execute("SELECT * FROM chunk LIMIT 1").fetch_df())
+        # get 1 from document table
+        print(session.execute("SELECT * FROM document LIMIT 1").fetch_df())
