@@ -80,6 +80,7 @@ def create_batch_files(
     chunks: list[Chunk],
     batch_dir: pathlib.Path,
     batch_size: int = 49_990,
+    texts: Optional[list[str]] = None,
 ):
     """
     Create batch files for OpenAI embedding requests from document chunks.
@@ -89,7 +90,14 @@ def create_batch_files(
         chunks: List of Chunk objects to embed
         batch_dir: Directory to save batch files
         batch_size: Maximum number of texts per batch
+        texts: Optional list of texts to embed, must match length of chunks
     """
+    if texts is None:
+        raise ValueError("texts parameter is required for creating batch files")
+    
+    if len(chunks) != len(texts):
+        raise ValueError("Number of chunks and texts must match")
+        
     output_dir = pathlib.Path(batch_dir / REQUEST_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -101,14 +109,18 @@ def create_batch_files(
         chunks[i:i+batch_size]
         for i in range(0, len(chunks), batch_size)
     ]
+    batch_texts = [
+        texts[i:i+batch_size]
+        for i in range(0, len(texts), batch_size)
+    ]
     
     # Write each batch to a file
-    for i, batch_items in enumerate(batch_chunks):
+    for i, (batch_items, batch_text_items) in enumerate(zip(batch_chunks, batch_texts)):
         batch_file = output_dir / f"batch_{i}.jsonl"
         chunk_map_file = chunk_map_dir / f"chunk_map_{i}.jsonl"
         
         with open(batch_file, 'w') as f, open(chunk_map_file, 'w') as map_f:
-            for j, chunk in enumerate(batch_items):
+            for j, (chunk, text) in enumerate(zip(batch_items, batch_text_items)):
                 # Create a unique custom ID
                 custom_id = f"chunk-{i}-{j}"
                 
@@ -126,7 +138,7 @@ def create_batch_files(
                     "url": "/v1/embeddings",
                     "body": {
                         "model": "text-embedding-3-small",
-                        "input": chunk.text
+                        "input": text
                     }
                 }
                 f.write(f"{json.dumps(request)}\n")
@@ -363,6 +375,7 @@ def process_results(
                     continue
 
                 chunk = chunk_map[custom_id]
+                chunk.embedding = embedding
                 processed_chunks.append(chunk)
                 processed_embeddings.append(embedding)
                 processed_count += 1

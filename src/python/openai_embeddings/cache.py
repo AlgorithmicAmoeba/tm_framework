@@ -15,21 +15,13 @@ import pandas as pd
 class Chunk:
     """A chunk of text to embed."""
     document_hash: str = ""
-    chunk_hash: str = ""
-    chunk_start_index: int = 0
-    chunk_end_index: int = 0
-    corpus_name: str = ""
-    text: str = ""
+    embedding: Optional[list[float]] = None
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "document_hash": self.document_hash,
-            "chunk_hash": self.chunk_hash,
-            "chunk_start_index": self.chunk_start_index,
-            "chunk_end_index": self.chunk_end_index,
-            "corpus_name": self.corpus_name,
-            "text": self.text
+            "embedding": self.embedding
         }
     
     @classmethod
@@ -37,11 +29,7 @@ class Chunk:
         """Create Chunk from dictionary."""
         return cls(
             document_hash=data.get("document_hash", ""),
-            chunk_hash=data.get("chunk_hash", ""),
-            chunk_start_index=data.get("chunk_start_index", 0),
-            chunk_end_index=data.get("chunk_end_index", 0),
-            corpus_name=data.get("corpus_name", ""),
-            text=data.get("text", "")
+            embedding=data.get("embedding")
         )
 
 def hash_text(text: str) -> str:
@@ -105,9 +93,9 @@ def check_cache(
             query = """
             SELECT embedding
             FROM chunk
-            WHERE chunk_hash = ?
+            WHERE document_hash = ?
             """
-            result = conn.execute(query, [chunk.chunk_hash]).fetchone()
+            result = conn.execute(query, [chunk.document_hash]).fetchone()
             if result:
                 is_cached.append(True)
                 embeddings.append(json.loads(result[0]))
@@ -180,7 +168,7 @@ def add_to_cache(
 def get_document_chunks(
     document_hash: str,
     cache_path: pathlib.Path
-) -> list[list[float]]:
+) -> list[Chunk]:
     """
     Get all chunks for a specific document by its hash.
     
@@ -189,7 +177,7 @@ def get_document_chunks(
         cache_path: Path to the cache database
         
     Returns:
-        List of embeddings
+        List of Chunk objects
     """
     ensure_cache_db(cache_path)
     
@@ -216,7 +204,7 @@ def get_document_chunks(
 def get_chunk_by_hash(
     chunk_hash: str,
     cache_path: pathlib.Path
-) -> Optional[list[float]]:
+) -> Optional[Chunk]:
     """
     Get a specific chunk by its hash.
     
@@ -225,7 +213,7 @@ def get_chunk_by_hash(
         cache_path: Path to the cache database
         
     Returns:
-        Embedding, or None if not found
+        Chunk object, or None if not found
     """
     ensure_cache_db(cache_path)
     
@@ -233,18 +221,15 @@ def get_chunk_by_hash(
         # Get chunk info
         result = conn.execute("""
         SELECT 
-            document_hash, chunk_hash, chunk_start_index, 
+            document_hash, embedding
+        FROM document
         WHERE document_hash = ?
         """, [chunk_hash]).fetchone()
         
         if result:
             return Chunk(
                 document_hash=result[0],
-                chunk_hash=result[1],
-                chunk_start_index=result[2],
-                chunk_end_index=result[3],
-                corpus_name=result[4],
-                text=result[5]
+                embedding=json.loads(result[1])
             )
     
     return None

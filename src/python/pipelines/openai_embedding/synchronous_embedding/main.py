@@ -70,12 +70,8 @@ async def process_job(
         
         # Create chunk object for cache
         chunk = Chunk(
-            document_hash=job["chunk_hash"],  # Using chunk_hash as document_hash for cache
-            chunk_hash=job["chunk_hash"],
-            chunk_start_index=0,
-            chunk_end_index=len(job["chunk_content"]),
-            corpus_name="embedding_job",  # Using a default corpus name
-            text=job["chunk_content"]
+            document_hash=job["chunk_hash"],
+            embedding=embedding
         )
         
         # Add to cache
