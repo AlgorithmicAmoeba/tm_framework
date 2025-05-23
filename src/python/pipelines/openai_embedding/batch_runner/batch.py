@@ -11,7 +11,8 @@ from typing import Optional
 import openai
 from tqdm import tqdm
 
-from openai_embeddings.cache import add_to_cache, Chunk
+from pipelines.openai_embedding.chunk import Chunk
+from pipelines.openai_embedding.batch_runner.cache import add_to_cache
 
 # Configure logging
 logging.basicConfig(

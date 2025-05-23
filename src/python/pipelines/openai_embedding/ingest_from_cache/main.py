@@ -14,8 +14,9 @@ from tqdm import tqdm
 
 from database import get_session
 import configuration as cfg
+from pipelines.openai_embedding.chunk import Chunk
 from shared_code import color_logging_text
-from openai_embeddings.cache import Chunk, get_cache_stats
+from pipelines.openai_embedding.batch_runner.cache import get_cache_stats
 
 
 def get_chunks_needing_embeddings(session: Session, batch_size: int = 1000) -> List[str]:

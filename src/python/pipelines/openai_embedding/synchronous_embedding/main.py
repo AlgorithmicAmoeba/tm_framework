@@ -13,8 +13,9 @@ from sqlalchemy.orm import Session
 
 from database import get_session
 import configuration as cfg
+from pipelines.openai_embedding.chunk import Chunk
 from shared_code import color_logging_text
-from openai_embeddings.cache import ensure_cache_db, add_to_cache, Chunk
+from pipelines.openai_embedding.batch_runner.cache import ensure_cache_db, add_to_cache
 
 
 def generate_embedding(client: openai.Client, text: str, model: str) -> List[float]:
