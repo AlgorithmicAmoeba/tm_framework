@@ -106,14 +106,13 @@ def run_lda_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int
         with get_session(db_config) as session:
             query = text("""
                 INSERT INTO pipeline.topic_model_corpus_result 
-                (topic_model_id, corpus_id, topics, num_topics, iteration)
-                VALUES (:model_id, :corpus_id, :topics, :num_topics, :iteration)
+                (topic_model_id, corpus_id, topics, num_topics)
+                VALUES (:model_id, :corpus_id, :topics, :num_topics)
             """).bindparams(
                 model_id=model_id,
                 corpus_id=corpus_id,
                 topics=json.dumps(topics),
-                num_topics=num_topics,
-                iteration=iteration
+                num_topics=num_topics
             )
             session.execute(query)
             session.commit()

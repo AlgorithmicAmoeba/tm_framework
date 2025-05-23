@@ -111,7 +111,7 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
             raise ValueError("BERTopic model not found in database")
     
     # Run model multiple times
-    for iteration in range(num_iterations):
+    for _ in range(num_iterations):
         # Train BERTopic model
         bertopic = BERTopicModel(num_topics=num_topics)
         bertopic.train(documents, embeddings, vocabulary)
@@ -121,14 +121,13 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
         with get_session(db_config) as session:
             query = text("""
                 INSERT INTO pipeline.topic_model_corpus_result 
-                (topic_model_id, corpus_id, topics, num_topics, iteration)
-                VALUES (:model_id, :corpus_id, :topics, :num_topics, :iteration)
+                (topic_model_id, corpus_id, topics, num_topics)
+                VALUES (:model_id, :corpus_id, :topics, :num_topics)
             """).bindparams(
                 model_id=model_id,
                 corpus_id=corpus_id,
                 topics=json.dumps(topics),
-                num_topics=num_topics,
-                iteration=iteration
+                num_topics=num_topics
             )
             session.execute(query)
             session.commit()
