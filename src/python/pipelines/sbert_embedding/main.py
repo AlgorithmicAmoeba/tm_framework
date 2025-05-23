@@ -5,9 +5,10 @@ from tqdm import tqdm
 from configuration import load_config_from_env
 from database import get_session
 
+EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 
 def make_sbert_embeddings():
-    model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    model = SentenceTransformer(EMBEDDING_MODEL)
 
     max_seq_length = 128
 

@@ -28,6 +28,10 @@ INSERT INTO pipeline.topic_model (name, description)
 VALUES ('CombinedTM', 'CombinedTM model using sentence transformers and clustering')
 ON CONFLICT (name) DO NOTHING;
 
+-- Insert KeyNMF as a topic model
+INSERT INTO pipeline.topic_model (name, description) 
+VALUES ('KeyNMF', 'KeyNMF model using contextual embeddings and non-negative matrix factorization')
+ON CONFLICT (name) DO NOTHING;
 
 CREATE TABLE pipeline.topic_model_corpus_result (
     id SERIAL PRIMARY KEY,
