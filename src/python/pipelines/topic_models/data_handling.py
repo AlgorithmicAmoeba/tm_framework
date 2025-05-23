@@ -69,7 +69,43 @@ def get_vocabulary(corpus_name: str) -> Dict[int, str]:
             
         return {word_index: word for word_index, word in results}
 
-def get_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
+def get_sbert_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
+    """
+    Retrieve SBERT embeddings for all chunks in a corpus.
+    
+    Args:
+        corpus_name: Name of the corpus to retrieve embeddings for
+        
+    Returns:
+        Tuple containing:
+        - List of chunk hashes
+        - 2D numpy array of embeddings
+    """
+    # Load configuration
+    config = load_config_from_env()
+    db_config = config.database
+    
+    # Create database session
+    with get_session(db_config) as session:
+        # Get all SBERT chunk embeddings for the corpus by joining with chunked_document
+        query = text("""
+            SELECT cd.chunk_hash, ce.embedding
+            FROM pipeline.chunked_document cd
+            JOIN pipeline.sbert_chunk_embedding ce ON cd.chunk_hash = ce.chunk_hash
+            WHERE cd.corpus_name = :corpus_name
+            ORDER BY cd.raw_document_hash
+        """).bindparams(corpus_name=corpus_name)
+        results = session.execute(query).fetchall()
+        
+        if not results:
+            return [], np.array([])
+        
+        chunk_hashes = [row[0] for row in results]
+        embeddings = np.array([row[1] for row in results])
+        
+        return chunk_hashes, embeddings
+
+def get_openai_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
     """
     Retrieve embeddings for all chunks in a corpus.
     
@@ -104,6 +140,26 @@ def get_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
         embeddings = np.array([row[1] for row in results])
         
         return chunk_hashes, embeddings
+    
+def get_chunk_embeddings(corpus_name: str, embedding_type: str) -> Tuple[List[str], np.ndarray]:
+    """
+    Retrieve embeddings for all chunks in a corpus based on embedding type.
+    
+    Args:
+        corpus_name: Name of the corpus to retrieve embeddings for
+        embedding_type: Type of embedding to retrieve ('openai' or 'sbert')
+        
+    Returns:
+        Tuple containing:
+        - List of chunk hashes
+        - 2D numpy array of embeddings
+    """
+    if embedding_type == 'openai':
+        return get_openai_chunk_embeddings(corpus_name)
+    elif embedding_type == 'sbert':
+        return get_sbert_chunk_embeddings(corpus_name)
+    else:
+        raise ValueError(f"Unknown embedding type: {embedding_type}")
 
 def get_vocabulary_documents(corpus_name: str) -> List[Tuple[str, str]]:
     """
