@@ -63,7 +63,7 @@ def run_lda_pipeline(corpus_name: str, num_topics: int = 20) -> None:
     db_config = config.database
     
     # Get TF-IDF vectors and vocabulary
-    doc_hashes, tfidf_vectors = get_tfidf_vectors(corpus_name)
+    _, tfidf_vectors = get_tfidf_vectors(corpus_name)
     vocabulary = get_vocabulary(corpus_name)
     
     if len(tfidf_vectors) == 0:

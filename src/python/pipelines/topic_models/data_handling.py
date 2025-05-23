@@ -102,8 +102,34 @@ def get_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
         embeddings = np.array([row[1] for row in results])
         
         return chunk_hashes, embeddings
-    
 
+def get_vocabulary_documents(corpus_name: str) -> List[Tuple[str, str]]:
+    """
+    Retrieve vocabulary documents for a corpus from the vocabulary_document table.
+    
+    Args:
+        corpus_name: Name of the corpus to retrieve documents for
+        
+    Returns:
+        List of tuples containing (document_hash, content) for each document
+    """
+    # Load configuration
+    config = load_config_from_env()
+    db_config = config.database
+    
+    # Create database session
+    with get_session(db_config) as session:
+        query = text("""
+            SELECT raw_document_hash, content 
+            FROM pipeline.preprocessed_document 
+            WHERE corpus_name = :corpus_name
+        """).bindparams(corpus_name=corpus_name)
+        results = session.execute(query).fetchall()
+        
+        if not results:
+            return []
+            
+        return [(doc_hash, content) for doc_hash, content in results]
 
 if __name__ == "__main__":
     corpus_name = "newsgroups"
@@ -118,3 +144,6 @@ if __name__ == "__main__":
     
     vocabulary = get_vocabulary(corpus_name)
     print(vocabulary)
+    
+    vocabulary_docs = get_vocabulary_documents(corpus_name)
+    print(f"Found {len(vocabulary_docs)} vocabulary documents")
