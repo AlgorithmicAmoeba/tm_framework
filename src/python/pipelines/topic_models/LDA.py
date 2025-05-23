@@ -26,11 +26,12 @@ class LDA:
         self.corpus_lda = gensim.matutils.Scipy2Corpus(tfidf_vectors)
         self.idx2word = vocabulary
         
-        self.model = gensim.models.LdaModel(
+        self.model = gensim.models.LdaMulticore(
             self.corpus_lda,
             num_topics=self.num_topics,
             id2word=self.idx2word,
             random_state=42,
+            workers=4
         )
 
     def get_topics(self, n_words: int = 10) -> List[List[str]]:
