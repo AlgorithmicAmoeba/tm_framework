@@ -66,7 +66,7 @@ class AutoEncodingTopicModelWrapper:
         
         return topic_words
 
-def run_autoencoding_tm_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int = 1, combined: bool = False) -> None:
+def run_autoencoding_tm_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int = 1, combined: bool = False, embedding_type: str = "openai") -> None:
     """
     Run AutoEncodingTopicModel pipeline and store results in database
     
@@ -81,7 +81,7 @@ def run_autoencoding_tm_pipeline(corpus_name: str, num_topics: int = 20, num_ite
     db_config = config.database
     
     # Get document embeddings and vocabulary
-    _, embeddings = get_chunk_embeddings(corpus_name)
+    _, embeddings = get_chunk_embeddings(corpus_name, embedding_type)
     vocabulary_docs = get_vocabulary_documents(corpus_name)
     vocabulary = get_vocabulary(corpus_name)
     

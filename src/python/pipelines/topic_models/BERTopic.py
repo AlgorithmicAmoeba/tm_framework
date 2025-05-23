@@ -58,7 +58,7 @@ class BERTopicModel:
         
         return topic_words
 
-def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int = 1) -> None:
+def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int = 1, embedding_type: str = "openai") -> None:
     """
     Run BERTopic modeling pipeline and store results in database
     
@@ -72,7 +72,7 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
     db_config = config.database
     
     # Get document embeddings and vocabulary
-    _, embeddings = get_chunk_embeddings(corpus_name)
+    _, embeddings = get_chunk_embeddings(corpus_name, embedding_type)
     vocabulary_docs = get_vocabulary_documents(corpus_name)
     vocabulary = get_vocabulary(corpus_name)
     
