@@ -50,13 +50,14 @@ class LDA:
         )
         return [[word for word, _ in topic] for _, topic in topics]
 
-def run_lda_pipeline(corpus_name: str, num_topics: int = 20) -> None:
+def run_lda_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int = 1) -> None:
     """
     Run LDA topic modeling pipeline and store results in database
     
     Args:
         corpus_name: Name of the corpus to analyze
         num_topics: Number of topics to extract
+        num_iterations: Number of times to run the model
     """
     # Load configuration
     config = load_config_from_env()
@@ -72,12 +73,7 @@ def run_lda_pipeline(corpus_name: str, num_topics: int = 20) -> None:
     if not vocabulary:
         raise ValueError(f"No vocabulary found for corpus: {corpus_name}")
     
-    # Train LDA model
-    lda = LDA(num_topics=num_topics)
-    lda.train(tfidf_vectors, vocabulary)
-    topics = lda.get_topics()
-    
-    # Store results in database
+    # Get corpus ID and model ID once
     with get_session(db_config) as session:
         # Get corpus ID
         query = text("""
@@ -98,24 +94,34 @@ def run_lda_pipeline(corpus_name: str, num_topics: int = 20) -> None:
         
         if not model_id:
             raise ValueError("LDA topic model not found in database")
+    
+    # Run model multiple times
+    for iteration in range(num_iterations):
+        # Train LDA model
+        lda = LDA(num_topics=num_topics)
+        lda.train(tfidf_vectors, vocabulary)
+        topics = lda.get_topics()
         
-        # Insert results
-        query = text("""
-            INSERT INTO pipeline.topic_model_corpus_result 
-            (topic_model_id, corpus_id, topics, num_topics)
-            VALUES (:model_id, :corpus_id, :topics, :num_topics)
-        """).bindparams(
-            model_id=model_id,
-            corpus_id=corpus_id,
-            topics=json.dumps(topics),
-            num_topics=num_topics
-        )
-        session.execute(query)
-        session.commit()
+        # Store results in database
+        with get_session(db_config) as session:
+            query = text("""
+                INSERT INTO pipeline.topic_model_corpus_result 
+                (topic_model_id, corpus_id, topics, num_topics, iteration)
+                VALUES (:model_id, :corpus_id, :topics, :num_topics, :iteration)
+            """).bindparams(
+                model_id=model_id,
+                corpus_id=corpus_id,
+                topics=json.dumps(topics),
+                num_topics=num_topics,
+                iteration=iteration
+            )
+            session.execute(query)
+            session.commit()
 
 if __name__ == '__main__':
     # Example usage
     run_lda_pipeline(
         corpus_name="newsgroups",
-        num_topics=20
+        num_topics=20,
+        num_iterations=3
     )
