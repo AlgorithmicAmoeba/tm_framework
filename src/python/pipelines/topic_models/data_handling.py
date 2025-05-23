@@ -28,6 +28,7 @@ def get_tfidf_vectors(corpus_name: str) -> Tuple[List[str], np.ndarray]:
             SELECT raw_document_hash, terms 
             FROM pipeline.tfidf_vector 
             WHERE corpus_name = :corpus_name
+            ORDER BY raw_document_hash
         """).bindparams(corpus_name=corpus_name)
         results = session.execute(query).fetchall()
         
@@ -92,6 +93,7 @@ def get_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
             FROM pipeline.chunked_document cd
             JOIN pipeline.chunk_embedding ce ON cd.chunk_hash = ce.chunk_hash
             WHERE cd.corpus_name = :corpus_name
+            ORDER BY cd.raw_document_hash
         """).bindparams(corpus_name=corpus_name)
         results = session.execute(query).fetchall()
         
@@ -123,6 +125,7 @@ def get_vocabulary_documents(corpus_name: str) -> List[Tuple[str, str]]:
             SELECT raw_document_hash, content 
             FROM pipeline.preprocessed_document 
             WHERE corpus_name = :corpus_name
+            ORDER BY raw_document_hash
         """).bindparams(corpus_name=corpus_name)
         results = session.execute(query).fetchall()
         
