@@ -66,6 +66,7 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
         corpus_name: Name of the corpus to analyze
         num_topics: Number of topics to extract
         num_iterations: Number of times to run the model
+        embedding_type: Type of embeddings to use (default: "openai")
     """
     # Load configuration
     config = load_config_from_env()
@@ -121,13 +122,14 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
         with get_session(db_config) as session:
             query = text("""
                 INSERT INTO pipeline.topic_model_corpus_result 
-                (topic_model_id, corpus_id, topics, num_topics)
-                VALUES (:model_id, :corpus_id, :topics, :num_topics)
+                (topic_model_id, corpus_id, topics, num_topics, hyperparameters)
+                VALUES (:model_id, :corpus_id, :topics, :num_topics, :hyperparameters)
             """).bindparams(
                 model_id=model_id,
                 corpus_id=corpus_id,
                 topics=json.dumps(topics),
-                num_topics=num_topics
+                num_topics=num_topics,
+                hyperparameters=json.dumps({"embeddings": embedding_type})
             )
             session.execute(query)
             session.commit()

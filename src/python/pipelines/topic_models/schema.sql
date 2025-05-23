@@ -39,7 +39,7 @@ CREATE TABLE pipeline.topic_model_corpus_result (
     corpus_id INTEGER REFERENCES pipeline.corpus(id),
     topics jsonb,
     num_topics INTEGER NOT NULL,
+    hyperparameters jsonb DEFAULT '{}',
     soft_delete BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-

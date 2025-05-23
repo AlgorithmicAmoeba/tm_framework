@@ -67,13 +67,7 @@ class KeyNMFWrapper:
         
         return topic_words
 
-def run_keynmf_pipeline(
-    corpus_name: str, 
-    num_topics: int = 20, 
-    num_iterations: int = 1,
-    seed_phrase: Optional[str] = None,
-    embedding_type: str = "sbert"
-) -> None:
+def run_keynmf_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int = 1) -> None:
     """
     Run KeyNMF modeling pipeline and store results in database
     
@@ -81,14 +75,13 @@ def run_keynmf_pipeline(
         corpus_name: Name of the corpus to analyze
         num_topics: Number of topics to extract
         num_iterations: Number of times to run the model
-        seed_phrase: Optional seed phrase for seeded topic modeling
     """
     # Load configuration
     config = load_config_from_env()
     db_config = config.database
     
     # Get document embeddings and vocabulary
-    _, embeddings = get_chunk_embeddings(corpus_name, embedding_type)
+    _, embeddings = get_chunk_embeddings(corpus_name)
     vocabulary_docs = get_vocabulary_documents(corpus_name)
     vocabulary = get_vocabulary(corpus_name)
     
@@ -129,7 +122,7 @@ def run_keynmf_pipeline(
     # Run model multiple times
     for _ in range(num_iterations):
         # Train KeyNMF model
-        keynmf = KeyNMFWrapper(num_topics=num_topics, seed_phrase=seed_phrase)
+        keynmf = KeyNMFWrapper(num_topics=num_topics)
         keynmf.train(documents, embeddings, vocabulary)
         topics = keynmf.get_topics()
         
@@ -137,13 +130,14 @@ def run_keynmf_pipeline(
         with get_session(db_config) as session:
             query = text("""
                 INSERT INTO pipeline.topic_model_corpus_result 
-                (topic_model_id, corpus_id, topics, num_topics)
-                VALUES (:model_id, :corpus_id, :topics, :num_topics)
+                (topic_model_id, corpus_id, topics, num_topics, hyperparameters)
+                VALUES (:model_id, :corpus_id, :topics, :num_topics, :hyperparameters)
             """).bindparams(
                 model_id=model_id,
                 corpus_id=corpus_id,
                 topics=json.dumps(topics),
-                num_topics=num_topics
+                num_topics=num_topics,
+                hyperparameters=json.dumps({})
             )
             session.execute(query)
             session.commit()
