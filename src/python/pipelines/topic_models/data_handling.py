@@ -1,5 +1,6 @@
 from typing import Dict, List, Tuple
 import numpy as np
+from sqlalchemy import text
 from configuration import load_config_from_env
 from database import get_session
 
@@ -23,12 +24,12 @@ def get_tfidf_vectors(corpus_name: str) -> Tuple[List[str], np.ndarray]:
     # Create database session
     with get_session(db_config) as session:
         # Get all TF-IDF vectors for the corpus
-        query = """
+        query = text("""
             SELECT raw_document_hash, terms 
             FROM pipeline.tfidf_vector 
-            WHERE corpus_name = %s
-        """
-        results = session.execute(query, (corpus_name,)).fetchall()
+            WHERE corpus_name = :corpus_name
+        """).bindparams(corpus_name=corpus_name)
+        results = session.execute(query).fetchall()
         
         if not results:
             return [], np.array([])
@@ -57,13 +58,13 @@ def get_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
     # Create database session
     with get_session(db_config) as session:
         # Get all chunk embeddings for the corpus by joining with chunked_document
-        query = """
+        query = text("""
             SELECT cd.chunk_hash, ce.embedding
             FROM pipeline.chunked_document cd
             JOIN pipeline.chunk_embedding ce ON cd.chunk_hash = ce.chunk_hash
-            WHERE cd.corpus_name = %s
-        """
-        results = session.execute(query, (corpus_name,)).fetchall()
+            WHERE cd.corpus_name = :corpus_name
+        """).bindparams(corpus_name=corpus_name)
+        results = session.execute(query).fetchall()
         
         if not results:
             return [], np.array([])
@@ -72,3 +73,16 @@ def get_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
         embeddings = np.array([row[1] for row in results])
         
         return chunk_hashes, embeddings
+    
+
+
+if __name__ == "__main__":
+    corpus_name = "newsgroups"
+    
+    doc_hashes, vectors = get_tfidf_vectors(corpus_name)
+    print(doc_hashes)
+    print(vectors)
+
+    chunk_hashes, embeddings = get_chunk_embeddings(corpus_name)
+    print(chunk_hashes)
+    print(embeddings)
