@@ -1,3 +1,6 @@
+CREATE SCHEMA IF NOT EXISTS pipeline;
+
+
 -- Schema for chunk embeddings table
 CREATE TABLE IF NOT EXISTS pipeline.chunk_embedding (
     chunk_hash VARCHAR PRIMARY KEY,
