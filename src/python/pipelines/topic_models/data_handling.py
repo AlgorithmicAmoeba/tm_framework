@@ -39,6 +39,35 @@ def get_tfidf_vectors(corpus_name: str) -> Tuple[List[str], np.ndarray]:
         
         return doc_hashes, vectors
 
+def get_vocabulary(corpus_name: str) -> Dict[int, str]:
+    """
+    Retrieve vocabulary mapping for a corpus from the vocabulary_word table.
+    
+    Args:
+        corpus_name: Name of the corpus to retrieve vocabulary for
+        
+    Returns:
+        Dictionary mapping word indices to words
+    """
+    # Load configuration
+    config = load_config_from_env()
+    db_config = config.database
+    
+    # Create database session
+    with get_session(db_config) as session:
+        query = text("""
+            SELECT word_index, word 
+            FROM pipeline.vocabulary_word 
+            WHERE corpus_name = :corpus_name
+            ORDER BY word_index
+        """).bindparams(corpus_name=corpus_name)
+        results = session.execute(query).fetchall()
+        
+        if not results:
+            return {}
+            
+        return {word_index: word for word_index, word in results}
+
 def get_chunk_embeddings(corpus_name: str) -> Tuple[List[str], np.ndarray]:
     """
     Retrieve embeddings for all chunks in a corpus.
@@ -86,3 +115,6 @@ if __name__ == "__main__":
     chunk_hashes, embeddings = get_chunk_embeddings(corpus_name)
     print(chunk_hashes)
     print(embeddings)
+    
+    vocabulary = get_vocabulary(corpus_name)
+    print(vocabulary)
