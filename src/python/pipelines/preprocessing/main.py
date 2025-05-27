@@ -610,7 +610,7 @@ if __name__ == '__main__':
         imdb_params = {
             'top_n': 15000,
             'min_words_per_document': 10,
-            'min_df': 0.003,
+            'min_df': 0.006,
             'max_df': 0.7,
             'min_chars': 3,
             'remove_stopwords': True,
@@ -640,11 +640,11 @@ if __name__ == '__main__':
         # Run preprocessing for each corpus
         logging.info("Starting preprocessing pipelines...")
         
-        logging.info("Preprocessing newsgroups corpus...")
-        preprocess_newsgroups(session, newsgroups_params)
+        # logging.info("Preprocessing newsgroups corpus...")
+        # preprocess_newsgroups(session, newsgroups_params)
         
-        logging.info("Preprocessing Wikipedia corpus...")
-        preprocess_wikipedia(session, wikipedia_params)
+        # logging.info("Preprocessing Wikipedia corpus...")
+        # preprocess_wikipedia(session, wikipedia_params)
         
         logging.info("Preprocessing IMDB reviews corpus...")
         preprocess_imdb(session, imdb_params)
