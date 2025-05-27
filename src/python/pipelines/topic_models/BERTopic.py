@@ -137,7 +137,7 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
 if __name__ == '__main__':
     # Example usage
     run_bertopic_pipeline(
-        corpus_name="newsgroups",
+        corpus_name="imdb_reviews",
         num_topics=20,
         num_iterations=3
     )

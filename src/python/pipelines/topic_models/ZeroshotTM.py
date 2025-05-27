@@ -143,18 +143,20 @@ def run_autoencoding_tm_pipeline(corpus_name: str, num_topics: int = 20, num_ite
             session.execute(query)
             session.commit()
 
+        del tm
+
 if __name__ == '__main__':
     # Example usage for ZeroShotTM
-    run_autoencoding_tm_pipeline(
-        corpus_name="newsgroups",
-        num_topics=20,
-        num_iterations=3,
-        combined=False  # Use ZeroShotTM
-    )
+    # run_autoencoding_tm_pipeline(
+    #     corpus_name="newsgroups",
+    #     num_topics=20,
+    #     num_iterations=3,
+    #     combined=False  # Use ZeroShotTM
+    # )
     
     # Example usage for CombinedTM
     run_autoencoding_tm_pipeline(
-        corpus_name="newsgroups",
+        corpus_name="wikipedia_sample",
         num_topics=20,
         num_iterations=3,
         combined=True  # Use CombinedTM

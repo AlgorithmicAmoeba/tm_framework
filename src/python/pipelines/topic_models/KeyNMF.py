@@ -81,7 +81,7 @@ def run_keynmf_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: 
     db_config = config.database
     
     # Get document embeddings and vocabulary
-    _, embeddings = get_chunk_embeddings(corpus_name)
+    _, embeddings = get_chunk_embeddings(corpus_name, embedding_type="sbert")
     vocabulary_docs = get_vocabulary_documents(corpus_name)
     vocabulary = get_vocabulary(corpus_name)
     
