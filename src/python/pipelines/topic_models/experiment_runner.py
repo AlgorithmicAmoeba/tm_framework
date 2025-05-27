@@ -2,13 +2,12 @@ import itertools
 from typing import List
 from tqdm import tqdm
 from sqlalchemy import text
+import logging
 
 from configuration import load_config_from_env
 from database import get_session
-from LDA import run_lda_pipeline
-from BERTopic import run_bertopic_pipeline
-from ZeroshotTM import run_autoencoding_tm_pipeline
-from KeyNMF import run_keynmf_pipeline
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def get_corpus_list() -> List[str]:
     """Get list of all corpora from the database"""
@@ -54,15 +53,24 @@ def run_experiments(num_topics: int = 20, target_results: int = 10):
     corpora = get_corpus_list()
     models = get_topic_model_list()
 
+    from LDA import run_lda_pipeline
+    from BERTopic import run_bertopic_pipeline
+    from ZeroshotTM import run_autoencoding_tm_pipeline
+    from KeyNMF import run_keynmf_pipeline
+
     # Print the corpora and models
-    print(f"Corpora: {corpora}")
-    print(f"Models: {models}")
+    logging.info(f"Corpora: {corpora}")
+    logging.info(f"Models: {models}")
     
     # Create progress bar for all corpus-model pairs
     total_pairs = len(corpora) * len(models)
     pbar = tqdm(total=total_pairs, desc="Running experiments")
     
     for model_name, corpus_name in itertools.product(models, corpora):
+        if corpus_name == "imdb_reviews":
+            pbar.update(1)
+            continue
+
         # Check how many results we already have
         existing_results = count_existing_results(corpus_name, model_name, num_topics, config)
         
@@ -86,14 +94,98 @@ def run_experiments(num_topics: int = 20, target_results: int = 10):
                 elif model_name == 'KeyNMF':
                     run_keynmf_pipeline(corpus_name, num_topics, iterations_to_run)
             except Exception as e:
-                print(f"Error running {model_name} on {corpus_name}: {str(e)}")
+                logging.exception(f"Error running {model_name} on {corpus_name}")
         
         pbar.update(1)
     
     pbar.close()
 
+
+def pretty_print_model_corpus_table():
+    """
+    Print a table showing number of valid experiments for each model-corpus pair.
+    Colors indicate if target number of results is met (green), partially met (yellow), or none (red).
+    """
+    from rich.console import Console
+    from rich.table import Table
+    from sqlalchemy import text
+    
+    config = load_config_from_env()
+    
+    # Get list of models and corpora
+    models = get_topic_model_list()
+    corpora = get_corpus_list()
+    
+    # Get all distinct num_topics values from results
+    with get_session(config.database) as session:
+        query = text("""
+            SELECT DISTINCT num_topics 
+            FROM pipeline.topic_model_corpus_result
+            ORDER BY num_topics
+        """)
+        num_topics_list = [row[0] for row in session.execute(query)]
+    
+    console = Console()
+    
+    # Create a table for each num_topics value
+    for num_topics in num_topics_list:
+        table = Table(title=f"Number of Valid Experiments (Topics={num_topics})")
+        
+        # Add columns
+        table.add_column("Corpus", style="white")
+        for model in models:
+            table.add_column(model)
+            
+        # Add rows
+        for corpus in corpora:
+            row = [corpus]
+            for model in models:
+                # Get count of valid results
+                with get_session(config.database) as session:
+                    query = text("""
+                        SELECT COUNT(*) FROM pipeline.topic_model_corpus_result r
+                        JOIN pipeline.topic_model m ON r.topic_model_id = m.id
+                        JOIN pipeline.corpus c ON r.corpus_id = c.id
+                        WHERE m.name = :model_name
+                        AND c.name = :corpus_name
+                        AND r.num_topics = :num_topics
+                        AND r.soft_delete = false
+                    """).bindparams(
+                        model_name=model,
+                        corpus_name=corpus,
+                        num_topics=num_topics
+                    )
+                    count = session.execute(query).scalar()
+                
+                # Color code based on count
+                if count == 0:
+                    cell = f"[red]{count}[/red]"
+                elif count >= 5:  # Using 5 as target_results
+                    cell = f"[green]{count}[/green]"
+                else:
+                    cell = f"[yellow]{count}[/yellow]"
+                    
+                row.append(cell)
+            
+            table.add_row(*row)
+        
+        console.print(table)
+        console.print("\n")
+
 if __name__ == '__main__':
-    run_experiments(
-        num_topics=20,
-        target_results=5
-    )
+    pretty_print_model_corpus_table()
+    num_topicss = [
+        10,
+        20,
+        50,
+        100,
+        200,
+    ]
+    for num_topics in num_topicss:
+        run_experiments(
+            num_topics=num_topics,
+            target_results=10
+        )
+        logging.info(f"Finished running experiments for {num_topics} topics")
+
+    pretty_print_model_corpus_table()
