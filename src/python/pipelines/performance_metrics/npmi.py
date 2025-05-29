@@ -1,7 +1,7 @@
 import numpy as np
-from typing import List, Dict, Any, Set, Tuple
+from typing import Any, Optional
 from sqlalchemy import text
-from sqlalchemy.orm import Session # Assuming Session is imported for type hinting
+from sqlalchemy.orm import Session
 import json
 import re
 from pathlib import Path
@@ -17,7 +17,7 @@ CACHE_FILE_TEMPLATE = CACHE_DIR / "{corpus_name}_stats.json"
 
 # --- Core Data Fetching from SQL (Original Functions) ---
 
-def get_corpus_words(session: Session, corpus_name: str) -> Set[str]:
+def get_corpus_words(session: Session, corpus_name: str) -> set[str]:
     """Get all unique words in the corpus from the database."""
     query = text("""
         SELECT DISTINCT word
@@ -27,7 +27,7 @@ def get_corpus_words(session: Session, corpus_name: str) -> Set[str]:
     result = session.execute(query, {"corpus_name": corpus_name}).fetchall()
     return {row[0] for row in result} # Assuming 'word' is the first column
 
-def get_corpus_documents(session: Session, corpus_name: str) -> List[str]:
+def get_corpus_documents(session: Session, corpus_name: str) -> list[str]:
     """Get all document contents for the corpus from the database."""
     query = text("""
         SELECT content
@@ -43,12 +43,12 @@ def _co_occurrence_key(word1: str, word2: str) -> str:
     """Generates a consistent string key for a word pair for JSON storage."""
     return "_".join(sorted((word1, word2)))
 
-def _parse_co_occurrence_key(key_str: str) -> Tuple[str, str]:
+def _parse_co_occurrence_key(key_str: str) -> tuple[str, str]:
     """Parses a string key back into a word pair tuple."""
     parts = key_str.split('_', 1)
     return (parts[0], parts[1])
 
-def _compute_and_cache_stats(session: Session, corpus_name: str) -> Dict[str, Any]:
+def _compute_and_cache_stats(session: Session, corpus_name: str) -> dict[str, Any]:
     """
     Computes word frequencies and co-occurrences using sparse matrices
     and caches them to a JSON file.
@@ -128,7 +128,7 @@ def _compute_and_cache_stats(session: Session, corpus_name: str) -> Dict[str, An
     print(f"Successfully computed and cached statistics for {corpus_name} to {cache_file_path}")
     return stats_data
 
-def get_corpus_stats(session: Session, corpus_name: str, force_recompute: bool = False) -> Dict[str, Any]:
+def get_corpus_stats(session: Session, corpus_name: str, force_recompute: bool = False) -> dict[str, Any]:
     """
     Retrieves corpus statistics (total_docs, word_frequencies, co_occurrences)
     from cache if available, otherwise computes and caches them.
@@ -220,9 +220,9 @@ def calculate_npmi(word1_freq: int, word2_freq: int,
 
 
 def calculate_topic_coherence(
-    topic_words: List[str],
-    word_freqs: Dict[str, int],
-    co_occurrences: Dict[Tuple[str, str], int],
+    topic_words: list[str],
+    word_freqs: dict[str, int],
+    co_occurrences: dict[tuple[str, str], int],
     total_docs: int,
     top_n: int = 10
 ) -> float:
@@ -285,10 +285,11 @@ def calculate_topic_coherence(
 
 def calculate_corpus_npmi_coherence(
     session: Session, 
-    topics: List[List[str]],
+    topics: list[list[str]],
     corpus_name: str,
     top_n_words_per_topic: int = 10,
-    force_recompute_stats: bool = False
+    force_recompute_stats: bool = False,
+    corpus_stats: Optional[dict[str, Any]] = None
 ) -> float:
     """
     Calculate average NPMI coherence across all topics for a given corpus.
@@ -299,6 +300,7 @@ def calculate_corpus_npmi_coherence(
         corpus_name: Name of the corpus to calculate NPMI for.
         top_n_words_per_topic: Number of top words from each topic to use for coherence.
         force_recompute_stats: Whether to force re-computation of corpus statistics.
+        corpus_stats: Optional pre-computed corpus statistics. If provided, will use these instead of loading from cache.
     
     Returns:
         float: Average NPMI score across all topics. Returns 0.0 if no topics or no valid coherences.
@@ -308,7 +310,8 @@ def calculate_corpus_npmi_coherence(
 
     # Get corpus statistics (total docs, word frequencies, co-occurrences)
     # This will either load from cache or compute and cache them.
-    corpus_stats = get_corpus_stats(session, corpus_name, force_recompute=force_recompute_stats)
+    if corpus_stats is None:
+        corpus_stats = get_corpus_stats(session, corpus_name, force_recompute=force_recompute_stats)
     
     total_docs = corpus_stats.get("total_docs", 0)
     word_freqs = corpus_stats.get("word_frequencies", {})
@@ -341,3 +344,51 @@ def calculate_corpus_npmi_coherence(
     average_coherence = float(np.mean(topic_coherence_scores))
     print(f"Average NPMI Coherence for corpus '{corpus_name}' across {len(topic_coherence_scores)} topics: {average_coherence:.4f}")
     return average_coherence
+
+def calculate_multiple_topic_models_npmi(
+    session: Session,
+    topic_models_outputs: list[list[list[str]]],
+    corpus_name: str,
+    top_n_words_per_topic: int = 10,
+    force_recompute_stats: bool = False
+) -> list[float]:
+    """
+    Calculate NPMI coherence for multiple topic model outputs efficiently by loading corpus stats only once.
+    
+    Args:
+        session: SQLAlchemy session for database access
+        topic_models_outputs: List of topic model outputs, where each output is a list of topics,
+                            and each topic is a list of words
+        corpus_name: Name of the corpus to calculate NPMI for
+        top_n_words_per_topic: Number of top words from each topic to use for coherence
+        force_recompute_stats: Whether to force re-computation of corpus statistics
+    
+    Returns:
+        List[float]: List of average NPMI scores, one for each topic model output
+    """
+    if not topic_models_outputs:
+        return []
+
+    # Load corpus stats only once for all topic model outputs
+    corpus_stats = get_corpus_stats(session, corpus_name, force_recompute=force_recompute_stats)
+    
+    # Calculate NPMI for each topic model output using the shared corpus stats
+    model_coherence_scores = []
+    for model_idx, topics in enumerate(topic_models_outputs):
+        if not topics:
+            print(f"Warning: Topic model output {model_idx} has no topics. Skipping.")
+            model_coherence_scores.append(0.0)
+            continue
+
+        coherence = calculate_corpus_npmi_coherence(
+            session=session,
+            topics=topics,
+            corpus_name=corpus_name,
+            top_n_words_per_topic=top_n_words_per_topic,
+            force_recompute_stats=False,  # We already have the stats
+            corpus_stats=corpus_stats  # Pass the pre-loaded stats
+        )
+        model_coherence_scores.append(coherence)
+        print(f"Model {model_idx} - Average NPMI Coherence: {coherence:.4f}")
+
+    return model_coherence_scores

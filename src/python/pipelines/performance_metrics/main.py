@@ -1,10 +1,11 @@
 import logging
 from typing import List, Dict, Any
 import json
+from collections import defaultdict
 from configuration import load_config_from_env
 from database import get_session
 from sqlalchemy import text
-from npmi import calculate_corpus_npmi_coherence
+from npmi import calculate_multiple_topic_models_npmi
 
 # Configure logging
 logging.basicConfig(
@@ -16,9 +17,10 @@ logger = logging.getLogger(__name__)
 def get_topic_model_results(session) -> List[Dict[str, Any]]:
     """Get all topic model results that haven't been evaluated yet."""
     query = text("""
-        SELECT tmr.id, tmr.corpus_id, tm.name as model_name
+        SELECT tmr.id, tmr.corpus_id, tm.name as model_name, c.name as corpus_name, tmr.topics
         FROM pipeline.topic_model_corpus_result tmr
         JOIN pipeline.topic_model tm ON tm.id = tmr.topic_model_id
+        JOIN pipeline.corpus c ON c.id = tmr.corpus_id
         WHERE NOT EXISTS (
             SELECT 1 
             FROM pipeline.topic_model_performance tmp 
@@ -57,36 +59,36 @@ def main():
             results = get_topic_model_results(session)
             logger.info(f"Found {len(results)} topic model results to evaluate")
 
+            # Group results by corpus
+            corpus_groups = defaultdict(list)
+            result_ids_by_corpus = defaultdict(list)
+            
             for result in results:
+                corpus_groups[result.corpus_name].append(result.topics)
+                result_ids_by_corpus[result.corpus_name].append(result.id)
+
+            # Process each corpus group
+            for corpus_name, topics_list in corpus_groups.items():
                 try:
-                    logger.info(f"Calculating NPMI for topic model result {result.id} ({result.model_name})")
+                    logger.info(f"Calculating NPMI for corpus: {corpus_name} with {len(topics_list)} topic models")
                     
-                    # Get topics and corpus name
-                    query = text("""
-                        SELECT tmr.topics, c.name as corpus_name
-                        FROM pipeline.topic_model_corpus_result tmr
-                        JOIN pipeline.corpus c ON c.id = tmr.corpus_id
-                        WHERE tmr.id = :topic_model_result_id
-                    """)
-                    topic_result = session.execute(query, {"topic_model_result_id": result.id}).fetchone()
+                    # Calculate NPMI for all topic models in this corpus at once
+                    npmi_scores = calculate_multiple_topic_models_npmi(
+                        session=session,
+                        topic_models_outputs=topics_list,
+                        corpus_name=corpus_name
+                    )
                     
-                    if not topic_result:
-                        raise ValueError(f"No topic model result found for ID {result.id}")
-                    
-                    # Calculate NPMI
-                    npmi_score = calculate_corpus_npmi_coherence(session, topic_result.topics, topic_result.corpus_name)
-                    
-                    # Save the result with detailed metrics
-                    metric_value = {
-                        "score": float(npmi_score),
-                    }
-                    
-                    save_performance_metric(session, result.id, 'NPMI', metric_value)
-                    
-                    logger.info(f"NPMI score for result {result.id}: {npmi_score:.4f}")
+                    # Save results for each topic model
+                    for result_id, npmi_score in zip(result_ids_by_corpus[corpus_name], npmi_scores):
+                        metric_value = {
+                            "score": float(npmi_score),
+                        }
+                        save_performance_metric(session, result_id, 'NPMI', metric_value)
+                        logger.info(f"NPMI score for result {result_id}: {npmi_score:.4f}")
                     
                 except Exception as e:
-                    logger.error(f"Error processing result {result.id}: {str(e)}")
+                    logger.error(f"Error processing corpus {corpus_name}: {str(e)}")
                     continue
 
     except Exception as e:
