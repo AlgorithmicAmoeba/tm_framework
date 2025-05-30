@@ -12,17 +12,17 @@ CREATE TABLE IF NOT EXISTS pipeline.preprocessed_document (
     UNIQUE(corpus_name, raw_document_hash)
 );
 
--- -- This table stores documents with only vocabulary words
--- CREATE TABLE IF NOT EXISTS pipeline.vocabulary_document (
---     id SERIAL PRIMARY KEY,
---     raw_document_hash VARCHAR(255) NOT NULL,
---     corpus_name VARCHAR(255) NOT NULL,
---     content TEXT,
---     content_hash VARCHAR(255),
---     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
---     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
---     UNIQUE(corpus_name, raw_document_hash)
--- );
+-- This table stores documents with only vocabulary words
+CREATE TABLE IF NOT EXISTS pipeline.vocabulary_document (
+    id SERIAL PRIMARY KEY,
+    raw_document_hash VARCHAR(255) NOT NULL,
+    corpus_name VARCHAR(255) NOT NULL,
+    content TEXT,
+    content_hash VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(corpus_name, raw_document_hash)
+);
 
 -- This table stores vocabulary words extracted from documents
 CREATE TABLE IF NOT EXISTS pipeline.vocabulary_word (
