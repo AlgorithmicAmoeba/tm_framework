@@ -67,9 +67,9 @@ def run_experiments(num_topics: int = 20, target_results: int = 10):
     pbar = tqdm(total=total_pairs, desc="Running experiments")
     
     for model_name, corpus_name in itertools.product(models, corpora):
-        if corpus_name == "imdb_reviews":
-            pbar.update(1)
-            continue
+        # if corpus_name != "imdb_reviews":
+        #     pbar.update(1)
+        #     continue
 
         # Check how many results we already have
         existing_results = count_existing_results(corpus_name, model_name, num_topics, config)
@@ -184,7 +184,7 @@ if __name__ == '__main__':
     for num_topics in num_topicss:
         run_experiments(
             num_topics=num_topics,
-            target_results=10
+            target_results=5
         )
         logging.info(f"Finished running experiments for {num_topics} topics")
 
