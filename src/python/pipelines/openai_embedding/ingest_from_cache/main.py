@@ -2,6 +2,7 @@
 Process for ingesting embeddings from the cache into the main database.
 This allows for efficient access to previously generated embeddings.
 """
+import itertools
 import logging
 import pathlib
 from typing import List, Optional, Dict, Any, Tuple, Set
@@ -19,13 +20,12 @@ from shared_code import color_logging_text
 from pipelines.openai_embedding.batch_runner.cache import get_cache_stats
 
 
-def get_chunks_needing_embeddings(session: Session, batch_size: int = 1000) -> List[str]:
+def get_chunks_needing_embeddings(session: Session) -> List[str]:
     """
     Get chunks from chunked_document that don't have embeddings yet.
     
     Args:
         session: Database session
-        batch_size: Number of chunks to process at once
         
     Returns:
         List of chunk_hash
@@ -35,10 +35,9 @@ def get_chunks_needing_embeddings(session: Session, batch_size: int = 1000) -> L
         FROM pipeline.chunked_document cd
         LEFT JOIN pipeline.chunk_embedding ce ON cd.chunk_hash = ce.chunk_hash
         WHERE ce.chunk_hash IS NULL
-        LIMIT :batch_size
     """)
     
-    result = session.execute(query, {"batch_size": batch_size}).scalars().fetchall()
+    result = session.execute(query).scalars()
     return result
 
 
@@ -182,17 +181,18 @@ def main():
             WHERE ce.chunk_hash IS NULL
         """)
         total_chunks = session.execute(count_query).scalar()
-        
+        chunk_hashes = get_chunks_needing_embeddings(session)  # iterator
         with tqdm(total=total_chunks, desc="Processing chunks") as pbar:
+            # Get next batch of chunks needing embeddings
             while True:
-                # Get next batch of chunks needing embeddings
-                chunk_hashes = get_chunks_needing_embeddings(session)
-                if not chunk_hashes:
+                batch_size = 1000
+                batch = list(itertools.islice(chunk_hashes, batch_size))
+                if not batch:
                     break
-                
+
                 # Check which ones already have embeddings
-                existing_embeddings = get_existing_embeddings(session, chunk_hashes)
-                missing_hashes = [hash for hash in chunk_hashes if hash not in existing_embeddings]
+                existing_embeddings = get_existing_embeddings(session, batch)
+                missing_hashes = [hash for hash in batch if hash not in existing_embeddings]
                 
                 if missing_hashes:
                     # Try to get missing embeddings from cache
@@ -202,10 +202,11 @@ def main():
                         # Ingest found embeddings to database
                         ingested_count = ingest_embeddings_to_db(session, cache_embeddings)
                         total_ingested += ingested_count
-                
-                total_processed += len(chunk_hashes)
-                pbar.update(len(chunk_hashes))
+
+                pbar.update(len(batch))
                 pbar.set_postfix({'ingested': total_ingested})
+                
+                total_processed += len(batch)
         
         if total_ingested > 0:
             logging.info(color_logging_text(
