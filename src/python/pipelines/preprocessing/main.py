@@ -112,11 +112,20 @@ class TextPreprocessor:
             max_features=self._top_n
         )
         tfidf_matrix = vectorizer.fit_transform(cleaned_texts)
-        feature_names = vectorizer.get_feature_names_out()
+        vocabulary_words = vectorizer.get_feature_names_out()
+
+        vocabulary_words_set = set(vocabulary_words)
+
+        # Build documents that only have vocabulary words
+        # Each document should be a string of space separated vocabulary words that are in the document
+        vocabulary_only_documents = [
+            ' '.join([word for word in tokenized_texts[i] if word in vocabulary_words_set])
+            for i in range(len(cleaned_texts))
+        ]
 
         # Filter documents if needed
         if self._min_words_per_document:
-            text_lens = [len(tokens) for tokens in tokenized_texts]
+            text_lens = [len(tokens) for tokens in vocabulary_only_documents]
             valid_indices = [i for i, length in enumerate(text_lens) 
                             if length >= self._min_words_per_document]
             
@@ -126,6 +135,7 @@ class TextPreprocessor:
             tokenized_texts = [tokenized_texts[i] for i in valid_indices]
             tfidf_matrix = tfidf_matrix[valid_indices]
             raw_texts = [texts[i] for i in valid_indices]
+            vocabulary_only_documents = [vocabulary_only_documents[i] for i in valid_indices]
         
         # Build document-term vectors for database storage
         tfidf_vectors = []
@@ -141,13 +151,14 @@ class TextPreprocessor:
         return {
             'doc_hashes': doc_hashes,
             'cleaned_texts': cleaned_texts,
-            'vocabulary': feature_names,
+            'vocabulary': vocabulary_words,
             'tfidf_vectors': tfidf_vectors,
             'original_docs_count': len(texts),
             'filtered_docs_count': len(valid_indices),
             'original_vocab_size': original_vocab_size,
-            'filtered_vocab_size': len(feature_names),
+            'filtered_vocab_size': len(vocabulary_words),
             'raw_texts': raw_texts,
+            'vocabulary_only_documents': vocabulary_only_documents,
         }
     
     def _clean_texts(self, texts: list[str]) -> list[str]:
@@ -224,6 +235,12 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
     ).scalars().fetchall()
     existing_docs_dict = {doc_hash: False for doc_hash in existing_docs}
 
+    existing_vocabulary_only_docs = session.execute(
+        text("SELECT raw_document_hash FROM pipeline.vocabulary_document WHERE corpus_name = :corpus_name"),
+        {"corpus_name": corpus_name}
+    ).scalars().fetchall()
+    existing_vocabulary_only_docs_dict = {doc_hash: False for doc_hash in existing_vocabulary_only_docs}
+
     existing_vectors = session.execute(
         text("SELECT raw_document_hash, terms FROM pipeline.tfidf_vector WHERE corpus_name = :corpus_name"),
         {"corpus_name": corpus_name}
@@ -279,12 +296,15 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
     doc_hashes = processed_data['doc_hashes']
     cleaned_texts = processed_data['cleaned_texts']
     raw_texts = processed_data['raw_texts']
-    
+    vocabulary_only_documents = processed_data['vocabulary_only_documents']
+
     for i in range(len(doc_hashes)):
         doc_hash = doc_hashes[i]
         content = cleaned_texts[i]
         raw_content = raw_texts[i]
+        vocabulary_only_document = vocabulary_only_documents[i]
         content_hash = hash_string(content)
+        vocabulary_only_document_hash = hash_string(vocabulary_only_document)
         
         # Mark document as processed if it exists
         if doc_hash in existing_docs_dict:
@@ -323,6 +343,23 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
                 "corpus_name": corpus_name,
                 "document_hash": doc_hash,
                 "content": raw_content
+            }
+        )
+
+        # Insert vocabulary-only document
+        insert_vocabulary_only_doc_query = text("""
+            INSERT INTO pipeline.vocabulary_document (corpus_name, raw_document_hash, content, content_hash)
+            VALUES (:corpus_name, :document_hash, :content, :content_hash)
+            ON CONFLICT DO NOTHING
+        """)
+
+        session.execute(
+            insert_vocabulary_only_doc_query,
+            {
+                "corpus_name": corpus_name,
+                "document_hash": doc_hash,
+                "content": vocabulary_only_document,
+                "content_hash": vocabulary_only_document_hash
             }
         )
     
@@ -609,9 +646,9 @@ if __name__ == '__main__':
         
         imdb_params = {
             'top_n': 15000,
-            'min_words_per_document': 10,
-            'min_df': 0.006,
-            'max_df': 0.7,
+            'min_words_per_document': 150,
+            'min_df': 0.003,
+            'max_df': 0.1,
             'min_chars': 3,
             'remove_stopwords': True,
             'lemmatize': True
@@ -640,11 +677,11 @@ if __name__ == '__main__':
         # Run preprocessing for each corpus
         logging.info("Starting preprocessing pipelines...")
         
-        # logging.info("Preprocessing newsgroups corpus...")
-        # preprocess_newsgroups(session, newsgroups_params)
+        logging.info("Preprocessing newsgroups corpus...")
+        preprocess_newsgroups(session, newsgroups_params)
         
-        # logging.info("Preprocessing Wikipedia corpus...")
-        # preprocess_wikipedia(session, wikipedia_params)
+        logging.info("Preprocessing Wikipedia corpus...")
+        preprocess_wikipedia(session, wikipedia_params)
         
         logging.info("Preprocessing IMDB reviews corpus...")
         preprocess_imdb(session, imdb_params)
