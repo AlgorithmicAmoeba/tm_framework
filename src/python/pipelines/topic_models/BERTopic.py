@@ -1,5 +1,5 @@
 import numpy as np
-from bertopic import BERTopic
+from turftopic import BERTopic
 from sklearn.feature_extraction.text import CountVectorizer
 from typing import List, Dict
 from sqlalchemy import text
@@ -29,13 +29,12 @@ class BERTopicModel:
         
         # Initialize BERTopic with our vectorizer and desired number of topics
         self.model = BERTopic(
-            nr_topics=self.num_topics,
-            vectorizer_model=self.vectorizer,
-            verbose=True
+            n_reduce_to=self.num_topics,
+            vectorizer=self.vectorizer,
         )
         
         # Fit the model to our documents and embeddings
-        self.model.fit(documents, embeddings)
+        self.model.fit(documents, embeddings=embeddings)
 
     def get_topics(self, n_words: int = 10) -> List[List[str]]:
         """
@@ -47,14 +46,13 @@ class BERTopicModel:
         Returns:
             List of lists, where each inner list contains the top words for a topic
         """
-        topic_info = self.model.get_topics()
+        topic_info = self.model.get_topics(top_k=n_words)
         
         # Extract top n words for each topic
         topic_words = []
-        for i in range(len(topic_info)):
-            if i in topic_info:  # Skip -1 (outlier) topic
-                words = [word for word, _ in topic_info[i][:n_words]]
-                topic_words.append(words)
+        for _, topic in topic_info:
+            words = [word for word, _ in topic]
+            topic_words.append(words)
         
         return topic_words
 
