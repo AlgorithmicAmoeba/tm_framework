@@ -179,7 +179,7 @@ def get_vocabulary_documents(corpus_name: str) -> List[Tuple[str, str]]:
     with get_session(db_config) as session:
         query = text("""
             SELECT raw_document_hash, content 
-            FROM pipeline.preprocessed_document 
+            FROM pipeline.vocabulary_document 
             WHERE corpus_name = :corpus_name
             ORDER BY raw_document_hash
         """).bindparams(corpus_name=corpus_name)
