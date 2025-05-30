@@ -22,6 +22,10 @@ class AutoEncodingTopicModelWrapper:
         self.combined = combined
         self.model = None
         self.vectorizer = None
+        self._batch_size = 32000
+
+        if self.combined:
+            self._batch_size = 4000
 
     def train(self, documents: List[str], embeddings: np.ndarray, vocabulary: Dict[int, str]):
         """
@@ -40,7 +44,7 @@ class AutoEncodingTopicModelWrapper:
             n_components=self.num_topics,
             combined=self.combined,
             vectorizer=self.vectorizer,
-            batch_size=32000,
+            batch_size=self._batch_size,
         )
         
         # Fit the model to our documents and embeddings
