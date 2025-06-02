@@ -290,7 +290,7 @@ def calculate_corpus_npmi_coherence(
     top_n_words_per_topic: int = 10,
     force_recompute_stats: bool = False,
     corpus_stats: Optional[dict[str, Any]] = None
-) -> float:
+) -> dict[str, Any]:
     """
     Calculate average NPMI coherence across all topics for a given corpus.
     
@@ -306,7 +306,9 @@ def calculate_corpus_npmi_coherence(
         float: Average NPMI score across all topics. Returns 0.0 if no topics or no valid coherences.
     """
     if not topics:
-        return 0.0
+        return {
+            "score": 0.0
+        }
 
     # Get corpus statistics (total docs, word frequencies, co-occurrences)
     # This will either load from cache or compute and cache them.
@@ -338,12 +340,14 @@ def calculate_corpus_npmi_coherence(
         # print(f"Coherence for Topic {i}: {coherence:.4f}") # Optional: for debugging
     
     if not topic_coherence_scores:
-        print("No topic coherences were calculated.")
-        return 0.0
+        return {
+            "score": 0.0
+        }
         
     average_coherence = float(np.mean(topic_coherence_scores))
-    print(f"Average NPMI Coherence for corpus '{corpus_name}' across {len(topic_coherence_scores)} topics: {average_coherence:.4f}")
-    return average_coherence
+    return {
+        "score": average_coherence
+    }
 
 def calculate_multiple_topic_models_npmi(
     session: Session,
@@ -351,7 +355,7 @@ def calculate_multiple_topic_models_npmi(
     corpus_name: str,
     top_n_words_per_topic: int = 10,
     force_recompute_stats: bool = False
-) -> list[float]:
+) -> list[dict[str, Any]]:
     """
     Calculate NPMI coherence for multiple topic model outputs efficiently by loading corpus stats only once.
     
@@ -364,7 +368,7 @@ def calculate_multiple_topic_models_npmi(
         force_recompute_stats: Whether to force re-computation of corpus statistics
     
     Returns:
-        List[float]: List of average NPMI scores, one for each topic model output
+        List[dict[str, Any]]: List of average NPMI scores, one for each topic model output
     """
     if not topic_models_outputs:
         return []
@@ -377,7 +381,9 @@ def calculate_multiple_topic_models_npmi(
     for model_idx, topics in enumerate(topic_models_outputs):
         if not topics:
             print(f"Warning: Topic model output {model_idx} has no topics. Skipping.")
-            model_coherence_scores.append(0.0)
+            model_coherence_scores.append({
+                "score": 0.0
+            })
             continue
 
         coherence = calculate_corpus_npmi_coherence(
@@ -389,6 +395,5 @@ def calculate_multiple_topic_models_npmi(
             corpus_stats=corpus_stats  # Pass the pre-loaded stats
         )
         model_coherence_scores.append(coherence)
-        print(f"Model {model_idx} - Average NPMI Coherence: {coherence:.4f}")
 
     return model_coherence_scores
