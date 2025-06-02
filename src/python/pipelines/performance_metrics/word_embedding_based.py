@@ -4,6 +4,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 import random
 
+import scipy.spatial.distance
+
+import tqdm
+
 # --- Helper: Fetch word embeddings for a list of words ---
 def get_word_embeddings(session: Session, corpus_name: str) -> Dict[str, np.ndarray]:
     """
@@ -25,13 +29,7 @@ def get_word_embeddings(session: Session, corpus_name: str) -> Dict[str, np.ndar
 
 # --- Helper: Cosine similarity ---
 def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
-    if vec1 is None or vec2 is None:
-        return 0.0
-    norm1 = np.linalg.norm(vec1)
-    norm2 = np.linalg.norm(vec2)
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return float(np.dot(vec1, vec2) / (norm1 * norm2))
+    return 1 - scipy.spatial.distance.cosine(vec1, vec2)
 
 # --- WEPS metric for a pair of topics ---
 def calculate_weps_for_topic_pair(
@@ -101,15 +99,15 @@ def calculate_multiple_topic_models_weps(
     corpus_name: str,
     top_n_words_per_topic: int = 10,
     force_recompute_stats: bool = False
-) -> List[float]:
+) -> List[dict[str, Any]]:
     """
     Compute WEPS for multiple topic models.
     """
     embeddings = get_word_embeddings(session, corpus_name)
     weps_scores = []
-    for topic_model_output in topic_models_outputs:
+    for topic_model_output in tqdm.tqdm(topic_models_outputs):
         weps_scores.append(calculate_corpus_weps(session, topic_model_output, corpus_name, top_n_words_per_topic, embeddings=embeddings))
-    return weps_scores
+    return [{"score": score} for score in weps_scores]
 
 # --- WECS: Word Embedding-based Centroid Similarity ---
 def topic_centroid(topic_words: List[str], embeddings: Dict[str, np.ndarray], top_n: int = 10) -> Optional[np.ndarray]:
@@ -172,7 +170,7 @@ def calculate_multiple_topic_models_wecs(
     corpus_name: str,
     top_n_words_per_topic: int = 10,
     force_recompute_stats: bool = False
-) -> List[float]:
+) -> List[dict[str, Any]]:
     """
     Compute WECS for multiple topic models.
     """
@@ -180,7 +178,7 @@ def calculate_multiple_topic_models_wecs(
     wecs_scores = []
     for topic_model_output in topic_models_outputs:
         wecs_scores.append(calculate_corpus_wecs(session, topic_model_output, corpus_name, top_n_words_per_topic, embeddings=embeddings))
-    return wecs_scores
+    return [{"score": score} for score in wecs_scores]
 
 def calculate_intruder_shift(
     session: Session,
@@ -245,7 +243,7 @@ def calculate_multiple_topic_models_intruder_shift(
     top_n_words_per_topic: int = 10,
     n_repeats: int = 1000,
     force_recompute_stats: bool = False
-) -> List[float]:
+) -> List[dict[str, Any]]:
     """
     Compute Intruder Shift (ISH) for multiple topic models.
     """
@@ -253,4 +251,5 @@ def calculate_multiple_topic_models_intruder_shift(
     ish_scores = []
     for topic_model_output in topic_models_outputs:
         ish_scores.append(calculate_intruder_shift(session, topic_model_output, corpus_name, top_n_words_per_topic, n_repeats, embeddings=embeddings))
-    return ish_scores
+
+    return [{"score": score} for score in ish_scores]
