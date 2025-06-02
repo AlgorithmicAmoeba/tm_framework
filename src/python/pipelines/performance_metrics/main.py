@@ -6,6 +6,7 @@ from configuration import load_config_from_env
 from database import get_session
 from sqlalchemy import text
 from npmi import calculate_multiple_topic_models_npmi
+from word_embedding_based import calculate_multiple_topic_models_weps, calculate_multiple_topic_models_wecs, calculate_multiple_topic_models_intruder_shift
 
 # Configure logging
 logging.basicConfig(
@@ -14,8 +15,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def get_topic_model_results(session) -> List[Dict[str, Any]]:
-    """Get all topic model results that haven't been evaluated yet."""
+def get_topic_model_results(session, corpus: str, metric_name: str ) -> List[Dict[str, Any]]:
+    """Get topic model results that haven't been evaluated yet.
+    
+    Args:
+        session: Database session
+        corpus: Corpus name to filter results
+        metric_name: Metric name to filter results that haven't been evaluated for this metric
+    """
     query = text("""
         SELECT tmr.id, tmr.corpus_id, tm.name as model_name, c.name as corpus_name, tmr.topics
         FROM pipeline.topic_model_corpus_result tmr
@@ -25,10 +32,15 @@ def get_topic_model_results(session) -> List[Dict[str, Any]]:
             SELECT 1 
             FROM pipeline.topic_model_performance tmp 
             WHERE tmp.topic_model_corpus_result_id = tmr.id
+            AND tmp.metric_name = :metric_name
         )
         AND tmr.soft_delete = FALSE
+        AND c.name = :corpus
     """)
-    return session.execute(query).fetchall()
+    return session.execute(query, {
+        "corpus": corpus,
+        "metric_name": metric_name
+    }).fetchall()
 
 def save_performance_metric(session, topic_model_result_id: int, metric_name: str, metric_value: Dict[str, Any]):
     """Save a performance metric result to the database."""
@@ -46,54 +58,56 @@ def save_performance_metric(session, topic_model_result_id: int, metric_name: st
     })
     session.commit()
 
+def get_corpus_list(session) -> List[str]:
+    """Get all corpus names from the database."""
+    query = text("SELECT name FROM pipeline.corpus")
+    return [row[0] for row in session.execute(query).fetchall()]
+
 def main():
     """Main function to run performance metrics calculations."""
-    try:
-        config = load_config_from_env()
-        db_config = config.database
+    config = load_config_from_env()
+    db_config = config.database
 
-        with get_session(db_config) as session:
-            logger.info("Connected to database successfully")
+    metrics = {
+        'NPMI': calculate_multiple_topic_models_npmi,
+        'WEPS': calculate_multiple_topic_models_weps,
+        'WECS': calculate_multiple_topic_models_wecs,
+        'ISH': calculate_multiple_topic_models_intruder_shift,
+    }
 
-            # Get topic model results that need evaluation
-            results = get_topic_model_results(session)
-            logger.info(f"Found {len(results)} topic model results to evaluate")
+    with get_session(db_config) as session:
+        logger.info("Connected to database successfully")
 
-            # Group results by corpus
-            corpus_groups = defaultdict(list)
-            result_ids_by_corpus = defaultdict(list)
-            
-            for result in results:
-                corpus_groups[result.corpus_name].append(result.topics)
-                result_ids_by_corpus[result.corpus_name].append(result.id)
+        corpus_list = get_corpus_list(session)
+        logger.info(f"Found {len(corpus_list)} corpora")
 
-            # Process each corpus group
-            for corpus_name, topics_list in corpus_groups.items():
+        for corpus_name in corpus_list:
+            for metric_name, metric_function in metrics.items():
                 try:
-                    logger.info(f"Calculating NPMI for corpus: {corpus_name} with {len(topics_list)} topic models")
+                    logger.info(f"Calculating {metric_name} for corpus: {corpus_name}")
+                    results = get_topic_model_results(session, corpus_name, metric_name)[:10]
+                    logger.info(f"Found {len(results)} topic model results to evaluate")
+
+                    if len(results) == 0:
+                        logger.info(f"No topic model results to evaluate for corpus: {corpus_name}")
+                        continue
                     
-                    # Calculate NPMI for all topic models in this corpus at once
-                    npmi_scores = calculate_multiple_topic_models_npmi(
+                    topic_models_outputs = [result.topics for result in results]
+                    metric_scores = metric_function(
                         session=session,
-                        topic_models_outputs=topics_list,
+                        topic_models_outputs=topic_models_outputs,
                         corpus_name=corpus_name
                     )
-                    
-                    # Save results for each topic model
-                    for result_id, npmi_score in zip(result_ids_by_corpus[corpus_name], npmi_scores):
-                        metric_value = {
-                            "score": float(npmi_score),
-                        }
-                        save_performance_metric(session, result_id, 'NPMI', metric_value)
-                        logger.info(f"NPMI score for result {result_id}: {npmi_score:.4f}")
-                    
-                except Exception as e:
-                    logger.error(f"Error processing corpus {corpus_name}: {str(e)}")
-                    continue
 
-    except Exception as e:
-        logger.error(f"Error in main process: {str(e)}")
-        raise
+                    return
+                    
+                    for result, metric_score in zip(results, metric_scores):
+                        save_performance_metric(session, result.id, metric_name, metric_score)
+
+                except Exception as e:
+                    logger.error(f"Error calculating {metric_name} for corpus: {corpus_name}: {str(e)}")
+                    continue
+                    
 
 if __name__ == "__main__":
     main()
