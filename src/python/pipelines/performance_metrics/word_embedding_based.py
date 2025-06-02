@@ -2,6 +2,7 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+import random
 
 # --- Helper: Fetch word embeddings for a list of words ---
 def get_word_embeddings(session: Session, corpus_name: str) -> Dict[str, np.ndarray]:
@@ -180,3 +181,76 @@ def calculate_multiple_topic_models_wecs(
     for topic_model_output in topic_models_outputs:
         wecs_scores.append(calculate_corpus_wecs(session, topic_model_output, corpus_name, top_n_words_per_topic, embeddings=embeddings))
     return wecs_scores
+
+def calculate_intruder_shift(
+    session: Session,
+    topics: List[List[str]],
+    corpus_name: str,
+    top_n_words_per_topic: int = 10,
+    n_repeats: int = 1000,
+    embeddings: Dict[str, np.ndarray] = None,
+    random_seed: int = 42
+) -> float:
+    """
+    Compute the Intruder Shift (ISH) metric for a list of topics.
+    For each topic, repeatedly replace a random word with a random word from another topic,
+    compute the centroid shift, and average the cosine similarity between original and shifted centroids.
+    Lower ISH means more coherent/diverse topics.
+    """
+    if not topics or len(topics) < 2:
+        return 0.0
+    if embeddings is None:
+        embeddings = get_word_embeddings(session, corpus_name)
+    
+    random.seed(random_seed)
+    K = len(topics)
+    sim_sums = [0.0 for _ in range(K)]
+    sim_counts = [0 for _ in range(K)]
+    for i, topic in enumerate(topics):
+        topic_words = topic[:top_n_words_per_topic]
+        if len(topic_words) < 2:
+            continue
+        
+        orig_centroid = topic_centroid(topic_words, embeddings, top_n=top_n_words_per_topic)
+        other_topic_indices = [j for j in range(K) if j != i and len(topics[j][:top_n_words_per_topic]) > 0]
+        if orig_centroid is None or not other_topic_indices:
+            continue
+        for _ in range(n_repeats): 
+            # Pick a random word index in this topic
+            idx_in_topic = random.randint(0, len(topic_words) - 1)
+            # Pick a random other topic
+            j = random.choice(other_topic_indices)
+            other_topic_words = topics[j][:top_n_words_per_topic]
+            # Pick a random word from the other topic
+            intruder_word = random.choice(other_topic_words)
+            # Replace the word in topic i with the intruder
+            shifted_words = list(topic_words)
+            shifted_words[idx_in_topic] = intruder_word
+            # Compute centroids
+            shifted_centroid = topic_centroid(shifted_words, embeddings, top_n=top_n_words_per_topic)
+            if shifted_centroid is None:
+                continue
+            sim = cosine_similarity(orig_centroid, shifted_centroid)
+            sim_sums[i] += sim
+            sim_counts[i] += 1
+    # Average over repeats for each topic, then over topics
+    topic_ish = [sim_sums[i] / sim_counts[i] if sim_counts[i] > 0 else 0.0 for i in range(K)]
+    return float(np.mean(topic_ish)) if topic_ish else 0.0
+
+
+def calculate_multiple_topic_models_intruder_shift(
+    session: Session,
+    topic_models_outputs: List[List[List[str]]],
+    corpus_name: str,
+    top_n_words_per_topic: int = 10,
+    n_repeats: int = 1000,
+    force_recompute_stats: bool = False
+) -> List[float]:
+    """
+    Compute Intruder Shift (ISH) for multiple topic models.
+    """
+    embeddings = get_word_embeddings(session, corpus_name)
+    ish_scores = []
+    for topic_model_output in topic_models_outputs:
+        ish_scores.append(calculate_intruder_shift(session, topic_model_output, corpus_name, top_n_words_per_topic, n_repeats, embeddings=embeddings))
+    return ish_scores
