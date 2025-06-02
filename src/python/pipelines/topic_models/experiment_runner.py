@@ -39,67 +39,7 @@ def count_existing_results(corpus_name: str, model_name: str, num_topics: int, c
             AND tmr.num_topics = :num_topics
         """).bindparams(corpus_name=corpus_name, model_name=model_name, num_topics=num_topics)
         return session.execute(query).scalar()
-
-def run_experiments(num_topics: int = 20, target_results: int = 10):
-    """
-    Run all topic models against all corpora until target number of results is reached
     
-    Args:
-        num_topics: Number of topics to extract
-        num_iterations: Number of times to run each model
-        target_results: Target number of non-soft-deleted results per corpus-model pair
-    """
-    config = load_config_from_env()
-    corpora = get_corpus_list()
-    models = get_topic_model_list()
-
-    from LDA import run_lda_pipeline
-    from BERTopic import run_bertopic_pipeline
-    from ZeroshotTM import run_autoencoding_tm_pipeline
-    from KeyNMF import run_keynmf_pipeline
-
-    # Print the corpora and models
-    logging.info(f"Corpora: {corpora}")
-    logging.info(f"Models: {models}")
-    
-    # Create progress bar for all corpus-model pairs
-    total_pairs = len(corpora) * len(models)
-    pbar = tqdm(total=total_pairs, desc="Running experiments")
-    
-    for model_name, corpus_name in itertools.product(models, corpora):
-        # if corpus_name != "imdb_reviews":
-        #     pbar.update(1)
-        #     continue
-
-        # Check how many results we already have
-        existing_results = count_existing_results(corpus_name, model_name, num_topics, config)
-        
-        if existing_results < target_results:
-            # Calculate how many more iterations we need
-            iterations_to_run = target_results - existing_results
-
-            # Update pbar
-            pbar.set_description(f"Running {model_name} on {corpus_name} (iterations: {iterations_to_run})")
-            
-            # Run the appropriate pipeline
-            try:
-                if model_name == 'LDA':
-                    run_lda_pipeline(corpus_name, num_topics, iterations_to_run)
-                elif model_name == 'BERTopic':
-                    run_bertopic_pipeline(corpus_name, num_topics, iterations_to_run)
-                elif model_name == 'ZeroShotTM':
-                    run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=False)
-                elif model_name == 'CombinedTM':
-                    run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=True)
-                elif model_name == 'KeyNMF':
-                    run_keynmf_pipeline(corpus_name, num_topics, iterations_to_run)
-            except Exception as e:
-                logging.exception(f"Error running {model_name} on {corpus_name}")
-        
-        pbar.update(1)
-    
-    pbar.close()
-
 
 def pretty_print_model_corpus_table():
     """
@@ -172,7 +112,72 @@ def pretty_print_model_corpus_table():
         console.print(table)
         console.print("\n")
 
+
+def run_experiments(num_topics: int = 20, target_results: int = 10):
+    """
+    Run all topic models against all corpora until target number of results is reached
+    
+    Args:
+        num_topics: Number of topics to extract
+        num_iterations: Number of times to run each model
+        target_results: Target number of non-soft-deleted results per corpus-model pair
+    """
+    config = load_config_from_env()
+    corpora = get_corpus_list()
+    models = get_topic_model_list()
+
+    from LDA import run_lda_pipeline
+    from BERTopic import run_bertopic_pipeline
+    from ZeroshotTM import run_autoencoding_tm_pipeline
+    from KeyNMF import run_keynmf_pipeline
+
+    # Print the corpora and models
+    logging.info(f"Corpora: {corpora}")
+    logging.info(f"Models: {models}")
+    
+    # Create progress bar for all corpus-model pairs
+    total_pairs = len(corpora) * len(models)
+    pbar = tqdm(total=total_pairs, desc="Running experiments")
+    
+    for model_name, corpus_name in itertools.product(models, corpora):
+        # if model_name == "BERTopic":
+        #     pbar.update(1)
+        #     continue
+
+        # Check how many results we already have
+        existing_results = count_existing_results(corpus_name, model_name, num_topics, config)
+        
+        if existing_results < target_results:
+            # Calculate how many more iterations we need
+            iterations_to_run = target_results - existing_results
+
+            # Update pbar
+            pbar.set_description(f"Running {model_name} on {corpus_name} (iterations: {iterations_to_run})")
+            
+            # Run the appropriate pipeline
+            try:
+                if model_name == 'LDA':
+                    run_lda_pipeline(corpus_name, num_topics, iterations_to_run)
+                elif model_name == 'BERTopic':
+                    run_bertopic_pipeline(corpus_name, num_topics, iterations_to_run)
+                elif model_name == 'ZeroShotTM':
+                    run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=False)
+                elif model_name == 'CombinedTM':
+                    run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=True)
+                elif model_name == 'KeyNMF':
+                    run_keynmf_pipeline(corpus_name, num_topics, iterations_to_run)
+            except Exception as e:
+                logging.exception(f"Error running {model_name} on {corpus_name}")
+        
+        pbar.update(1)
+    
+    pbar.close()
+
 if __name__ == '__main__':
+    import faulthandler
+    faulthandler.enable()
+    # faulthandler.disable()
+
     pretty_print_model_corpus_table()
     num_topicss = [
         10,
@@ -184,7 +189,7 @@ if __name__ == '__main__':
     for num_topics in num_topicss:
         run_experiments(
             num_topics=num_topics,
-            target_results=5
+            target_results=10
         )
         logging.info(f"Finished running experiments for {num_topics} topics")
 
