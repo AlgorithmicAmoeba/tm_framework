@@ -109,3 +109,74 @@ def calculate_multiple_topic_models_weps(
     for topic_model_output in topic_models_outputs:
         weps_scores.append(calculate_corpus_weps(session, topic_model_output, corpus_name, top_n_words_per_topic, embeddings=embeddings))
     return weps_scores
+
+# --- WECS: Word Embedding-based Centroid Similarity ---
+def topic_centroid(topic_words: List[str], embeddings: Dict[str, np.ndarray], top_n: int = 10) -> Optional[np.ndarray]:
+    """
+    Compute the centroid (mean vector) of the embeddings for the given topic words.
+    Only considers words present in the embeddings dict, up to top_n words.
+    Returns None if no embeddings are found for the topic.
+    """
+    topic_words = topic_words[:top_n]
+    vectors = [embeddings[w] for w in topic_words if w in embeddings]
+    if not vectors:
+        return None
+    return np.mean(vectors, axis=0)
+
+def calculate_wecs_for_topic_pair(
+    embeddings: Dict[str, np.ndarray],
+    topic_i: List[str],
+    topic_j: List[str],
+    top_n: int = 10
+) -> float:
+    """
+    Compute WECS between two topics as cosine similarity between their centroids.
+    """
+    centroid_i = topic_centroid(topic_i, embeddings, top_n=top_n)
+    centroid_j = topic_centroid(topic_j, embeddings, top_n=top_n)
+    if centroid_i is None or centroid_j is None:
+        return 0.0
+    return cosine_similarity(centroid_i, centroid_j)
+
+def calculate_corpus_wecs(
+    session: Session,
+    topics: List[List[str]],
+    corpus_name: str,
+    top_n_words_per_topic: int = 10,
+    embeddings: Dict[str, np.ndarray] = None
+) -> float:
+    """
+    Compute average WECS across all unique topic pairs in the list.
+    """
+    if not topics or len(topics) < 2:
+        return 0.0
+    if embeddings is None:
+        embeddings = get_word_embeddings(session, corpus_name)
+    n = len(topics)
+    wecs_scores = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            score = calculate_wecs_for_topic_pair(
+                embeddings,
+                topics[i],
+                topics[j],
+                top_n=top_n_words_per_topic
+            )
+            wecs_scores.append(score)
+    return float(np.mean(wecs_scores)) if wecs_scores else 0.0
+
+def calculate_multiple_topic_models_wecs(
+    session: Session,
+    topic_models_outputs: List[List[List[str]]],
+    corpus_name: str,
+    top_n_words_per_topic: int = 10,
+    force_recompute_stats: bool = False
+) -> List[float]:
+    """
+    Compute WECS for multiple topic models.
+    """
+    embeddings = get_word_embeddings(session, corpus_name)
+    wecs_scores = []
+    for topic_model_output in topic_models_outputs:
+        wecs_scores.append(calculate_corpus_wecs(session, topic_model_output, corpus_name, top_n_words_per_topic, embeddings=embeddings))
+    return wecs_scores
