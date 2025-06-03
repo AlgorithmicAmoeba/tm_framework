@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 import random
 
 import scipy.spatial.distance
+from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
 
 import tqdm
 
@@ -25,25 +26,26 @@ def get_word_embeddings(session: Session, corpus_name: str) -> Dict[str, np.ndar
     for row in result:
         word, vector = row
         embeddings[word] = np.array(vector, dtype=np.float32)
+
+    embeddings[''] = np.zeros(300)
     return embeddings
 
-# --- Helper: Cosine similarity ---
-def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
-    return 1 - scipy.spatial.distance.cosine(vec1, vec2)
+
+# --- Helper: similarity ---
+def similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    return - np.dot(vec1, vec2) 
 
 # --- WEPS metric for a pair of topics ---
-def calculate_weps_for_topic_pair(
+def calculate_weps_for_topic_pair_slow(
     embeddings: Dict[str, np.ndarray],
     topic_i: List[str],
     topic_j: List[str],
-    corpus_name: str,
+    corpus_name: str,  # corpus_name is unused but kept for interface consistency
     top_n: int = 10
 ) -> float:
     """
-    Compute WEPS between two topics (lists of words) as per the formula:
+    Compute WEPS between two topics using a vectorized approach.
     WEPS(ti, tj) = (1/t^2) * sum_{v in ti} sum_{u in tj} sim(wv, wu)
-    where sim is cosine similarity between word embeddings.
-    Only considers top_n words from each topic.
     """
     topic_i = topic_i[:top_n]
     topic_j = topic_j[:top_n]
@@ -58,16 +60,19 @@ def calculate_weps_for_topic_pair(
         vec_v = embeddings.get(wv)
         for wu in topic_j:
             vec_u = embeddings.get(wu)
-            sim_sum += cosine_similarity(vec_v, vec_u)
-    return sim_sum / (t * t)
+            sim_sum += similarity(vec_v, vec_u)
+
+    res = sim_sum / (t * t)
+
+    return res
 
 # --- WEPS for a list of topics (average pairwise WEPS) ---
-def calculate_corpus_weps(
+def calculate_corpus_weps_slow(
     session: Session,
     topics: List[List[str]],
     corpus_name: str,
     top_n_words_per_topic: int = 10,
-    embeddings: Dict[str, np.ndarray] = None
+    embeddings: Dict[str, np.ndarray] | None = None
 ) -> float:
     """
     Compute average WEPS across all unique topic pairs in the list.
@@ -82,7 +87,7 @@ def calculate_corpus_weps(
     weps_scores = []
     for i in range(n):
         for j in range(i + 1, n):
-            score = calculate_weps_for_topic_pair(
+            score = calculate_weps_for_topic_pair_slow(
                 embeddings,
                 topics[i],
                 topics[j],
@@ -90,15 +95,34 @@ def calculate_corpus_weps(
                 top_n=top_n_words_per_topic
             )
             weps_scores.append(score)
-    return float(np.mean(weps_scores)) if weps_scores else 0.0
+
+    res = float(np.mean(weps_scores)) if weps_scores else 0.0
+    return res
+
+
+def calculate_corpus_weps(
+    topics: List[List[str]],
+    embeddings: Dict[str, np.ndarray],
+) -> float:
+
+    # Create tensor (topics, words, embeddings)
+    
+    topics_tensor = np.array([[embeddings[w] for w in topic] for topic in topics])
+
+    v_1 = np.einsum('twe,sve->', topics_tensor, topics_tensor)
+    v_2 = np.einsum('twe,twe->', topics_tensor, topics_tensor)
+    
+    w = len(topics[0])
+    t = len(topics)
+    res = -(v_1 - v_2) / (w * w) / (t * t)
+    
+    return res
 
 
 def calculate_multiple_topic_models_weps(
     session: Session,
     topic_models_outputs: List[List[List[str]]],
     corpus_name: str,
-    top_n_words_per_topic: int = 10,
-    force_recompute_stats: bool = False
 ) -> List[dict[str, Any]]:
     """
     Compute WEPS for multiple topic models.
@@ -106,7 +130,7 @@ def calculate_multiple_topic_models_weps(
     embeddings = get_word_embeddings(session, corpus_name)
     weps_scores = []
     for topic_model_output in tqdm.tqdm(topic_models_outputs):
-        weps_scores.append(calculate_corpus_weps(session, topic_model_output, corpus_name, top_n_words_per_topic, embeddings=embeddings))
+        weps_scores.append(calculate_corpus_weps(topic_model_output, embeddings))
     return [{"score": score} for score in weps_scores]
 
 # --- WECS: Word Embedding-based Centroid Similarity ---
@@ -135,8 +159,41 @@ def calculate_wecs_for_topic_pair(
     centroid_j = topic_centroid(topic_j, embeddings, top_n=top_n)
     if centroid_i is None or centroid_j is None:
         return 0.0
-    return cosine_similarity(centroid_i, centroid_j)
+    
+    res = similarity(centroid_i, centroid_j)
+    return res
 
+def calculate_wecs_for_topic_pair_fast(
+    embeddings: Dict[str, np.ndarray],
+    topic_i: List[str],
+    topic_j: List[str],
+) -> float:
+    """
+    Compute WECS between two topics as cosine similarity between their centroids.
+    """
+    topic_i_tensor = np.array([embeddings[w] for w in topic_i])
+    topic_j_tensor = np.array([embeddings[w] for w in topic_j])
+    
+    v_1 = np.einsum('we,ve->', topic_i_tensor, topic_j_tensor)
+    w = len(topic_i)
+    res = v_1 / (w * w)
+    return res
+
+def calculate_corpus_wecs_fast(
+    embeddings: Dict[str, np.ndarray],
+    topics: List[List[str]],
+) -> float:
+    """
+    Compute average WECS across all unique topic pairs in the list.
+    """
+    topics_tensor = np.array([[embeddings[w] for w in topic] for topic in topics])
+    v_1 = np.einsum('twe,sve->', topics_tensor, topics_tensor)
+    v_2 = np.einsum('twe,twe->', topics_tensor, topics_tensor)
+    w = len(topics[0])
+    t = len(topics)
+    res = -(v_1 - v_2) / (w * w) / (t * t)
+    return res
+    
 def calculate_corpus_wecs(
     session: Session,
     topics: List[List[str]],
@@ -228,7 +285,7 @@ def calculate_intruder_shift(
             shifted_centroid = topic_centroid(shifted_words, embeddings, top_n=top_n_words_per_topic)
             if shifted_centroid is None:
                 continue
-            sim = cosine_similarity(orig_centroid, shifted_centroid)
+            sim = similarity(orig_centroid, shifted_centroid)
             sim_sums[i] += sim
             sim_counts[i] += 1
     # Average over repeats for each topic, then over topics
@@ -253,3 +310,20 @@ def calculate_multiple_topic_models_intruder_shift(
         ish_scores.append(calculate_intruder_shift(session, topic_model_output, corpus_name, top_n_words_per_topic, n_repeats, embeddings=embeddings))
 
     return [{"score": score} for score in ish_scores]
+
+
+if __name__ == "__main__":
+    # Do 1000 cosine similarity calculations and time them
+    import time
+
+    n_vectors = 351064
+    vector_dim = 300
+
+    random_vector_1 = np.random.rand(vector_dim)
+    random_vector_2 = np.random.rand(vector_dim)
+
+    start_time = time.time()
+    for _ in tqdm.tqdm(range(n_vectors)):
+        similarity(random_vector_1, random_vector_2)
+    end_time = time.time()
+    print(f"Time taken: {end_time - start_time} seconds")
