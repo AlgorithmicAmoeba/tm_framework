@@ -1,4 +1,5 @@
 import logging
+import traceback
 from typing import List, Dict, Any
 import json
 from collections import defaultdict
@@ -71,8 +72,8 @@ def main():
     metrics = {
         'NPMI': calculate_multiple_topic_models_npmi,
         'WEPS': calculate_multiple_topic_models_weps,
-        'WECS': calculate_multiple_topic_models_wecs,
-        'ISH': calculate_multiple_topic_models_intruder_shift,
+        # 'WECS': calculate_multiple_topic_models_wecs,  same as WEPS for sim = dot product
+        # 'ISH': calculate_multiple_topic_models_intruder_shift,
     }
 
     with get_session(db_config) as session:
@@ -85,7 +86,7 @@ def main():
             for metric_name, metric_function in metrics.items():
                 try:
                     logger.info(f"Calculating {metric_name} for corpus: {corpus_name}")
-                    results = get_topic_model_results(session, corpus_name, metric_name)[:10]
+                    results = get_topic_model_results(session, corpus_name, metric_name)
                     logger.info(f"Found {len(results)} topic model results to evaluate")
 
                     if len(results) == 0:
@@ -98,14 +99,13 @@ def main():
                         topic_models_outputs=topic_models_outputs,
                         corpus_name=corpus_name
                     )
-
-                    return
                     
                     for result, metric_score in zip(results, metric_scores):
                         save_performance_metric(session, result.id, metric_name, metric_score)
 
                 except Exception as e:
                     logger.error(f"Error calculating {metric_name} for corpus: {corpus_name}: {str(e)}")
+                    logger.error(traceback.format_exc())
                     continue
                     
 
