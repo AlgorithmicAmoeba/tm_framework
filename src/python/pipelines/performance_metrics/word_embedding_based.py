@@ -4,9 +4,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 import random
 
-import scipy.spatial.distance
-from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
-
 import tqdm
 
 # --- Helper: Fetch word embeddings for a list of words ---
