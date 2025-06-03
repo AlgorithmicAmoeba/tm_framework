@@ -130,6 +130,8 @@ def run_experiments(num_topics: int = 20, target_results: int = 10):
     from BERTopic import run_bertopic_pipeline
     from ZeroshotTM import run_autoencoding_tm_pipeline
     from KeyNMF import run_keynmf_pipeline
+    from semantic_signal_separation import run_s3_pipeline
+    from gmm import run_gmm_pipeline
 
     # Print the corpora and models
     logging.info(f"Corpora: {corpora}")
@@ -166,6 +168,10 @@ def run_experiments(num_topics: int = 20, target_results: int = 10):
                     run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=True)
                 elif model_name == 'KeyNMF':
                     run_keynmf_pipeline(corpus_name, num_topics, iterations_to_run)
+                elif model_name == 'SemanticSignalSeparation':
+                    run_s3_pipeline(corpus_name, num_topics, iterations_to_run)
+                elif model_name == 'GMM':
+                    run_gmm_pipeline(corpus_name, num_topics, iterations_to_run)
             except Exception as e:
                 logging.exception(f"Error running {model_name} on {corpus_name}")
         

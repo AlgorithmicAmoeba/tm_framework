@@ -33,6 +33,16 @@ INSERT INTO pipeline.topic_model (name, description)
 VALUES ('KeyNMF', 'KeyNMF model using contextual embeddings and non-negative matrix factorization')
 ON CONFLICT (name) DO NOTHING;
 
+-- Insert SemanticSignalSeparation as a topic model
+INSERT INTO pipeline.topic_model (name, description) 
+VALUES ('SemanticSignalSeparation', 'SemanticSignalSeparation model using sentence transformers and clustering')
+ON CONFLICT (name) DO NOTHING;
+
+-- Insert GMM as a topic model
+INSERT INTO pipeline.topic_model (name, description) 
+VALUES ('GMM', 'GMM model using sentence transformers and clustering')
+ON CONFLICT (name) DO NOTHING;
+
 CREATE TABLE pipeline.topic_model_corpus_result (
     id SERIAL PRIMARY KEY,
     topic_model_id INTEGER REFERENCES pipeline.topic_model(id),
