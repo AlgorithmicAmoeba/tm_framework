@@ -27,6 +27,8 @@ def get_topic_model_list() -> List[str]:
 def pretty_print_metrics_table(metric_name: str):
     """
     Print a table showing average and standard deviation of a metric for each model-corpus pair.
+    The best performing model for each dataset is shown in green, second best in purple, and third best in blue.
+    All other values are shown in white.
     
     Args:
         metric_name: Name of the metric to display (must match metric_name in database)
@@ -61,8 +63,10 @@ def pretty_print_metrics_table(metric_name: str):
         # Add rows
         for corpus in corpora:
             row = [corpus]
+            model_values = []
+            
+            # First collect all values for this corpus
             for model in models:
-                # Get metric values
                 with get_session(config.database) as session:
                     query = text("""
                         SELECT p.metric_value 
@@ -84,7 +88,7 @@ def pretty_print_metrics_table(metric_name: str):
                     results = session.execute(query).fetchall()
                 
                 if not results:
-                    cell = "[red]No data[/red]"
+                    model_values.append((model, None))
                 else:
                     # Extract values from JSONB
                     values = []
@@ -101,10 +105,33 @@ def pretty_print_metrics_table(metric_name: str):
                     if values:
                         avg = np.mean(values)
                         std = np.std(values)
-                        cell = f"[green]{avg:.3f} ± {std:.3f}[/green]"
+                        model_values.append((model, (avg, std)))
                     else:
-                        cell = "[red]Invalid data[/red]"
-                    
+                        model_values.append((model, None))
+            
+            # Sort models by their average values (if available)
+            valid_models = [(model, values) for model, values in model_values if values is not None]
+            sorted_models = sorted(valid_models, key=lambda x: x[1][0], reverse=True)
+            
+            # Create a mapping of model to its rank (1-based)
+            model_ranks = {model: rank + 1 for rank, (model, _) in enumerate(sorted_models)}
+            
+            # Now add the cells with appropriate colors
+            for model, values in model_values:
+                if values is None:
+                    cell = "[red]No data[/red]"
+                else:
+                    avg, std = values
+                    rank = model_ranks.get(model)
+                    if rank == 1:
+                        color = "green"
+                    elif rank == 2:
+                        color = "purple"
+                    elif rank == 3:
+                        color = "blue"
+                    else:
+                        color = "white"
+                    cell = f"[{color}]{avg:.3f} ± {std:.3f}[/{color}]"
                 row.append(cell)
             
             table.add_row(*row)
@@ -115,3 +142,4 @@ def pretty_print_metrics_table(metric_name: str):
 if __name__ == '__main__':
     # Example usage
     pretty_print_metrics_table("NPMI")
+    pretty_print_metrics_table("WEPS")
