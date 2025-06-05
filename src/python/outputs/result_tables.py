@@ -346,11 +346,79 @@ def pretty_print_pareto_front_table():
     console.print(table)
     console.print("\n")
 
+def pretty_print_model_points_table():
+    """
+    Print a table showing the total points for each model broken down by metric.
+    Points are calculated by ranking models from 1 to N for each corpus, num_topics pair,
+    where a model with rank n gets 1/n points.
+    """
+    console = Console()
+    
+    # Get list of models and corpora
+    models = get_topic_model_list()
+    corpora = get_corpus_list()
+    metrics = ["NPMI", "WEPS", "ISH"]
+    num_topics_list = get_num_topics_list()
+    
+    # Initialize points dictionary for each model and metric
+    model_points = {
+        model: {metric: 0.0 for metric in metrics}
+        for model in models
+    }
+    
+    # Calculate points for each combination
+    for corpus in corpora:
+        for num_topics in num_topics_list:
+            for metric in metrics:
+                # Get metrics for all models
+                model_values = []
+                for model in models:
+                    result = get_model_metrics_for_corpus(model, corpus, num_topics, metric)
+                    if result is not None:
+                        model_values.append((model, result[0]))  # Use mean value
+                
+                # Sort models by their values
+                sorted_models = sorted(model_values, key=lambda x: x[1], reverse=(metric != "ISH"))
+                
+                # Award points based on rank
+                for rank, (model, _) in enumerate(sorted_models, 1):
+                    model_points[model][metric] += 1.0 / rank
+    
+    # Create the table
+    table = Table(title="Points by Model and Metric")
+    
+    # Add columns
+    table.add_column("Model", style="white")
+    for metric in metrics:
+        table.add_column(metric, justify="right")
+    table.add_column("Total", justify="right")
+    
+    # Calculate total points for each model
+    model_totals = {
+        model: sum(points.values())
+        for model, points in model_points.items()
+    }
+    
+    # Sort models by total points
+    sorted_models = sorted(model_totals.items(), key=lambda x: x[1], reverse=True)
+    
+    # Add rows
+    for model, _ in sorted_models:
+        row = [model]
+        for metric in metrics:
+            row.append(f"{model_points[model][metric]:.1f}")
+        row.append(f"{model_totals[model]:.1f}")
+        table.add_row(*row)
+    
+    console.print(table)
+    console.print("\n")
+
 if __name__ == '__main__':
     # Example usage
     # pretty_print_metrics_table("NPMI")
     # pretty_print_metrics_table("WEPS")
     # pretty_print_metrics_table("ISH")
-    pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
     # pretty_print_top_models_table(joined=False, top_n=2)  # Separate tables with top 2 models
+    pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
     pretty_print_pareto_front_table()  # Show number of models on Pareto front
+    pretty_print_model_points_table()  # Show points by model and metric
