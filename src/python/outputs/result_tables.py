@@ -3,7 +3,7 @@ from rich.table import Table
 from sqlalchemy import text
 import json
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple, Optional
 
 from configuration import load_config_from_env
 from database import get_session
@@ -24,6 +24,135 @@ def get_topic_model_list() -> List[str]:
         result = session.execute(query)
         return [row[0] for row in result]
 
+def get_num_topics_list() -> List[int]:
+    """Get list of all distinct num_topics values from results"""
+    config = load_config_from_env()
+    with get_session(config.database) as session:
+        query = text("""
+            SELECT DISTINCT r.num_topics 
+            FROM pipeline.topic_model_corpus_result r
+            JOIN pipeline.topic_model_performance p ON r.id = p.topic_model_corpus_result_id
+            ORDER BY r.num_topics
+        """)
+        return [row[0] for row in session.execute(query)]
+
+def extract_metric_values(metric_value: Any) -> List[float]:
+    """Extract numeric values from metric_value, handling different formats"""
+    if isinstance(metric_value, str):
+        metric_value = json.loads(metric_value)
+    if isinstance(metric_value, dict):
+        return [v for v in metric_value.values() if isinstance(v, (int, float))]
+    elif isinstance(metric_value, (int, float)):
+        return [metric_value]
+    return []
+
+def get_model_metrics_for_corpus(
+    model: str,
+    corpus: str,
+    num_topics: int,
+    metric_name: str
+) -> Optional[Tuple[float, float]]:
+    """Get average and standard deviation of a metric for a model-corpus pair"""
+    config = load_config_from_env()
+    with get_session(config.database) as session:
+        query = text("""
+            SELECT p.metric_value 
+            FROM pipeline.topic_model_performance p
+            JOIN pipeline.topic_model_corpus_result r ON p.topic_model_corpus_result_id = r.id
+            JOIN pipeline.topic_model m ON r.topic_model_id = m.id
+            JOIN pipeline.corpus c ON r.corpus_id = c.id
+            WHERE m.name = :model_name
+            AND c.name = :corpus_name
+            AND r.num_topics = :num_topics
+            AND p.metric_name = :metric_name
+            AND r.soft_delete = false
+        """).bindparams(
+            model_name=model,
+            corpus_name=corpus,
+            num_topics=num_topics,
+            metric_name=metric_name
+        )
+        results = session.execute(query).fetchall()
+    
+    if not results:
+        return None
+    
+    values = []
+    for result in results:
+        values.extend(extract_metric_values(result[0]))
+    
+    if values:
+        return np.mean(values), np.std(values)
+    return None
+
+def get_model_metrics_all(
+    corpus: str,
+    model: str,
+    num_topics: int,
+    metrics: List[str]
+) -> Optional[Dict[str, float]]:
+    """Get all metric values for a model-corpus pair"""
+    metric_values = {}
+    for metric in metrics:
+        result = get_model_metrics_for_corpus(model, corpus, num_topics, metric)
+        if result is None:
+            return None
+        metric_values[metric] = result[0]  # Use mean value
+    return metric_values
+
+def get_model_colors(models: List[str]) -> Dict[str, str]:
+    """Get color mapping for models"""
+    colors = [
+        "red", "green", "blue", "yellow", "magenta", "cyan",
+        "bright_red", "bright_green", "bright_blue", "bright_yellow",
+        "bright_magenta", "bright_cyan", "white", "bright_white"
+    ]
+    return {model: color for model, color in zip(models, colors)}
+
+def get_ranked_models(
+    model_values: List[Tuple[str, Tuple[float, float]]]
+) -> Dict[str, int]:
+    """Get ranking of models based on their metric values"""
+    valid_models = [(model, values) for model, values in model_values if values is not None]
+    sorted_models = sorted(valid_models, key=lambda x: x[1][0], reverse=True)
+    return {model: rank + 1 for rank, (model, _) in enumerate(sorted_models)}
+
+def get_rank_color(rank: int) -> str:
+    """Get color based on rank"""
+    if rank == 1:
+        return "green"
+    elif rank == 2:
+        return "purple"
+    elif rank == 3:
+        return "blue"
+    return "white"
+
+def is_dominated(
+    model_metrics: Dict[str, float],
+    all_metrics: List[Dict[str, float]],
+    metrics: List[str]
+) -> bool:
+    """Check if a model is dominated by any other model"""
+    for other_metrics in all_metrics:
+        if other_metrics == model_metrics:
+            continue
+        
+        dominated = True
+        for metric in metrics:
+            if metric in ["NPMI", "WEPS"]:  # Higher is better
+                if other_metrics[metric] <= model_metrics[metric]:
+                    dominated = False
+                    break
+            else:  # ISH - lower is better
+                if other_metrics[metric] >= model_metrics[metric]:
+                    dominated = False
+                    break
+        
+        if dominated:
+            return True
+    
+    return False
+
 def pretty_print_metrics_table(metric_name: str):
     """
     Print a table showing average and standard deviation of a metric for each model-corpus pair.
@@ -33,23 +162,12 @@ def pretty_print_metrics_table(metric_name: str):
     Args:
         metric_name: Name of the metric to display (must match metric_name in database)
     """
-    config = load_config_from_env()
     console = Console()
     
     # Get list of models and corpora
     models = get_topic_model_list()
     corpora = get_corpus_list()
-    
-    # Get all distinct num_topics values from results
-    with get_session(config.database) as session:
-        query = text("""
-            SELECT DISTINCT r.num_topics 
-            FROM pipeline.topic_model_corpus_result r
-            JOIN pipeline.topic_model_performance p ON r.id = p.topic_model_corpus_result_id
-            WHERE p.metric_name = :metric_name
-            ORDER BY r.num_topics
-        """).bindparams(metric_name=metric_name)
-        num_topics_list = [row[0] for row in session.execute(query)]
+    num_topics_list = get_num_topics_list()
     
     # Create a table for each num_topics value
     for num_topics in num_topics_list:
@@ -67,54 +185,11 @@ def pretty_print_metrics_table(metric_name: str):
             
             # First collect all values for this corpus
             for model in models:
-                with get_session(config.database) as session:
-                    query = text("""
-                        SELECT p.metric_value 
-                        FROM pipeline.topic_model_performance p
-                        JOIN pipeline.topic_model_corpus_result r ON p.topic_model_corpus_result_id = r.id
-                        JOIN pipeline.topic_model m ON r.topic_model_id = m.id
-                        JOIN pipeline.corpus c ON r.corpus_id = c.id
-                        WHERE m.name = :model_name
-                        AND c.name = :corpus_name
-                        AND r.num_topics = :num_topics
-                        AND p.metric_name = :metric_name
-                        AND r.soft_delete = false
-                    """).bindparams(
-                        model_name=model,
-                        corpus_name=corpus,
-                        num_topics=num_topics,
-                        metric_name=metric_name
-                    )
-                    results = session.execute(query).fetchall()
-                
-                if not results:
-                    model_values.append((model, None))
-                else:
-                    # Extract values from JSONB
-                    values = []
-                    for result in results:
-                        metric_value = result[0]
-                        if isinstance(metric_value, str):
-                            metric_value = json.loads(metric_value)
-                        if isinstance(metric_value, dict):
-                            # If it's a dict, try to get a single numeric value
-                            values.extend([v for v in metric_value.values() if isinstance(v, (int, float))])
-                        elif isinstance(metric_value, (int, float)):
-                            values.append(metric_value)
-                    
-                    if values:
-                        avg = np.mean(values)
-                        std = np.std(values)
-                        model_values.append((model, (avg, std)))
-                    else:
-                        model_values.append((model, None))
+                result = get_model_metrics_for_corpus(model, corpus, num_topics, metric_name)
+                model_values.append((model, result))
             
-            # Sort models by their average values (if available)
-            valid_models = [(model, values) for model, values in model_values if values is not None]
-            sorted_models = sorted(valid_models, key=lambda x: x[1][0], reverse=True)
-            
-            # Create a mapping of model to its rank (1-based)
-            model_ranks = {model: rank + 1 for rank, (model, _) in enumerate(sorted_models)}
+            # Get model rankings
+            model_ranks = get_ranked_models(model_values)
             
             # Now add the cells with appropriate colors
             for model, values in model_values:
@@ -123,14 +198,7 @@ def pretty_print_metrics_table(metric_name: str):
                 else:
                     avg, std = values
                     rank = model_ranks.get(model)
-                    if rank == 1:
-                        color = "green"
-                    elif rank == 2:
-                        color = "purple"
-                    elif rank == 3:
-                        color = "blue"
-                    else:
-                        color = "white"
+                    color = get_rank_color(rank)
                     cell = f"[{color}]{avg:.3f} ± {std:.3f}[/{color}]"
                 row.append(cell)
             
@@ -148,78 +216,24 @@ def pretty_print_top_models_table(joined: bool = True, top_n: int = 3):
                If False, creates separate tables for each metric.
         top_n: Number of top performing models to show in each cell (default: 3)
     """
-    config = load_config_from_env()
     console = Console()
     
     # Get list of models and corpora
     models = get_topic_model_list()
     corpora = get_corpus_list()
     metrics = ["NPMI", "WEPS", "ISH"]
+    num_topics_list = get_num_topics_list()
     
-    # Define colors for models
-    model_colors = {
-        model: color for model, color in zip(
-            models,
-            [
-                "red", "green", "blue", "yellow", "magenta", "cyan",
-                "bright_red", "bright_green", "bright_blue", "bright_yellow",
-                "bright_magenta", "bright_cyan", "white", "bright_white"
-            ]
-        )
-    }
-    
-    # Get all distinct num_topics values from results
-    with get_session(config.database) as session:
-        query = text("""
-            SELECT DISTINCT r.num_topics 
-            FROM pipeline.topic_model_corpus_result r
-            JOIN pipeline.topic_model_performance p ON r.id = p.topic_model_corpus_result_id
-            ORDER BY r.num_topics
-        """)
-        num_topics_list = [row[0] for row in session.execute(query)]
+    # Get model colors
+    model_colors = get_model_colors(models)
     
     def get_top_models(corpus: str, metric: str, num_topics: int) -> str:
         """Helper function to get top N models for a given combination"""
         model_values = []
         for model in models:
-            with get_session(config.database) as session:
-                query = text("""
-                    SELECT p.metric_value 
-                    FROM pipeline.topic_model_performance p
-                    JOIN pipeline.topic_model_corpus_result r ON p.topic_model_corpus_result_id = r.id
-                    JOIN pipeline.topic_model m ON r.topic_model_id = m.id
-                    JOIN pipeline.corpus c ON r.corpus_id = c.id
-                    WHERE m.name = :model_name
-                    AND c.name = :corpus_name
-                    AND r.num_topics = :num_topics
-                    AND p.metric_name = :metric_name
-                    AND r.soft_delete = false
-                """).bindparams(
-                    model_name=model,
-                    corpus_name=corpus,
-                    num_topics=num_topics,
-                    metric_name=metric
-                )
-                results = session.execute(query).fetchall()
-            
-            if not results:
-                continue
-            
-            # Extract values from JSONB
-            values = []
-            for result in results:
-                metric_value = result[0]
-                if isinstance(metric_value, str):
-                    metric_value = json.loads(metric_value)
-                if isinstance(metric_value, dict):
-                    # If it's a dict, try to get a single numeric value
-                    values.extend([v for v in metric_value.values() if isinstance(v, (int, float))])
-                elif isinstance(metric_value, (int, float)):
-                    values.append(metric_value)
-            
-            if values:
-                avg = np.mean(values)
-                model_values.append((model, avg))
+            result = get_model_metrics_for_corpus(model, corpus, num_topics, metric)
+            if result is not None:
+                model_values.append((model, result[0]))  # Use mean value
         
         # Sort models by their average values
         sorted_models = sorted(model_values, key=lambda x: x[1], reverse=True)
@@ -290,92 +304,13 @@ def pretty_print_pareto_front_table():
     Print a table showing the number of models on the Pareto front for each corpus and number of topics combination.
     The Pareto front is calculated based on NPMI, WEPS, and ISH metrics.
     """
-    config = load_config_from_env()
     console = Console()
     
     # Get list of models and corpora
     models = get_topic_model_list()
     corpora = get_corpus_list()
     metrics = ["NPMI", "WEPS", "ISH"]
-    
-    # Get all distinct num_topics values from results
-    with get_session(config.database) as session:
-        query = text("""
-            SELECT DISTINCT r.num_topics 
-            FROM pipeline.topic_model_corpus_result r
-            JOIN pipeline.topic_model_performance p ON r.id = p.topic_model_corpus_result_id
-            ORDER BY r.num_topics
-        """)
-        num_topics_list = [row[0] for row in session.execute(query)]
-    
-    def get_model_metrics(corpus: str, model: str, num_topics: int) -> Dict[str, float]:
-        """Helper function to get all metric values for a model"""
-        metric_values = {}
-        for metric in metrics:
-            with get_session(config.database) as session:
-                query = text("""
-                    SELECT p.metric_value 
-                    FROM pipeline.topic_model_performance p
-                    JOIN pipeline.topic_model_corpus_result r ON p.topic_model_corpus_result_id = r.id
-                    JOIN pipeline.topic_model m ON r.topic_model_id = m.id
-                    JOIN pipeline.corpus c ON r.corpus_id = c.id
-                    WHERE m.name = :model_name
-                    AND c.name = :corpus_name
-                    AND r.num_topics = :num_topics
-                    AND p.metric_name = :metric_name
-                    AND r.soft_delete = false
-                """).bindparams(
-                    model_name=model,
-                    corpus_name=corpus,
-                    num_topics=num_topics,
-                    metric_name=metric
-                )
-                results = session.execute(query).fetchall()
-            
-            if not results:
-                return None
-            
-            # Extract values from JSONB
-            values = []
-            for result in results:
-                metric_value = result[0]
-                if isinstance(metric_value, str):
-                    metric_value = json.loads(metric_value)
-                if isinstance(metric_value, dict):
-                    # If it's a dict, try to get a single numeric value
-                    values.extend([v for v in metric_value.values() if isinstance(v, (int, float))])
-                elif isinstance(metric_value, (int, float)):
-                    values.append(metric_value)
-            
-            if values:
-                metric_values[metric] = np.mean(values)
-            else:
-                return None
-        
-        return metric_values
-    
-    def is_dominated(model_metrics: Dict[str, float], all_metrics: List[Dict[str, float]]) -> bool:
-        """Check if a model is dominated by any other model"""
-        for other_metrics in all_metrics:
-            if other_metrics == model_metrics:
-                continue
-            
-            # A model is dominated if another model is better on all metrics
-            dominated = True
-            for metric in metrics:
-                if metric in ["NPMI", "WEPS"]:  # Higher is better
-                    if other_metrics[metric] <= model_metrics[metric]:
-                        dominated = False
-                        break
-                else:  # ISH - lower is better
-                    if other_metrics[metric] >= model_metrics[metric]:
-                        dominated = False
-                        break
-            
-            if dominated:
-                return True
-        
-        return False
+    num_topics_list = get_num_topics_list()
     
     # Create the table
     table = Table(title="Number of Models on Pareto Front")
@@ -394,14 +329,14 @@ def pretty_print_pareto_front_table():
             # Get metrics for all models
             all_metrics = []
             for model in models:
-                metrics = get_model_metrics(corpus, model, num_topics)
-                if metrics:
-                    all_metrics.append(metrics)
+                metrics_dict = get_model_metrics_all(corpus, model, num_topics, metrics)
+                if metrics_dict:
+                    all_metrics.append(metrics_dict)
             
             # Count models on Pareto front
             pareto_count = 0
-            for metrics in all_metrics:
-                if not is_dominated(metrics, all_metrics):
+            for model_metrics in all_metrics:
+                if not is_dominated(model_metrics, all_metrics, metrics):
                     pareto_count += 1
             
             row.append(str(pareto_count))
@@ -416,6 +351,6 @@ if __name__ == '__main__':
     # pretty_print_metrics_table("NPMI")
     # pretty_print_metrics_table("WEPS")
     # pretty_print_metrics_table("ISH")
-    # pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
+    pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
     # pretty_print_top_models_table(joined=False, top_n=2)  # Separate tables with top 2 models
     pretty_print_pareto_front_table()  # Show number of models on Pareto front
