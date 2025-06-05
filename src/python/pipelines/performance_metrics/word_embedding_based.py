@@ -223,7 +223,6 @@ def calculate_multiple_topic_models_wecs(
     topic_models_outputs: List[List[List[str]]],
     corpus_name: str,
     top_n_words_per_topic: int = 10,
-    force_recompute_stats: bool = False
 ) -> List[dict[str, Any]]:
     """
     Compute WECS for multiple topic models.
@@ -234,7 +233,7 @@ def calculate_multiple_topic_models_wecs(
         wecs_scores.append(calculate_corpus_wecs(session, topic_model_output, corpus_name, top_n_words_per_topic, embeddings=embeddings))
     return [{"score": score} for score in wecs_scores]
 
-def calculate_intruder_shift(
+def calculate_intruder_shift_slow(
     session: Session,
     topics: List[List[str]],
     corpus_name: str,
@@ -249,6 +248,7 @@ def calculate_intruder_shift(
     compute the centroid shift, and average the cosine similarity between original and shifted centroids.
     Lower ISH means more coherent/diverse topics.
     """
+    # intruder_shift_equality(embeddings, topics)
     if not topics or len(topics) < 2:
         return 0.0
     if embeddings is None:
@@ -289,6 +289,89 @@ def calculate_intruder_shift(
     topic_ish = [sim_sums[i] / sim_counts[i] if sim_counts[i] > 0 else 0.0 for i in range(K)]
     return float(np.mean(topic_ish)) if topic_ish else 0.0
 
+def calculate_intruder_shift(
+    embeddings: Dict[str, np.ndarray],
+    topics: List[List[str]],
+    n_repeats: int = 1000,
+    random_seed: int = 42,
+) -> float:
+    """
+    Compute the Intruder Shift (ISH) metric for a list of topics.
+    """
+    np.random.seed(random_seed)
+
+    t = len(topics)
+    w = len(topics[0])
+
+    random_topic_indices = np.random.randint(0, t, size=(t, n_repeats))
+    random_word_indices_in = np.random.randint(0, w, size=(t, n_repeats))
+    random_word_indices_out = np.random.randint(0, w, size=(t, n_repeats))
+
+    topic_word_tensors = np.array([[embeddings[w] for w in topic] for topic in topics])
+
+    topic_scores = []
+    for i in range(t):
+        tw_i = topic_word_tensors[i]
+
+        # create a tensor of shape (n_repeats, w, e) by tiling tw_i n_repeats times
+        tw_i_shifted = np.repeat(tw_i[np.newaxis, :, :], n_repeats, axis=0)
+
+        tw_i_shifted[np.arange(n_repeats), random_word_indices_in[i]] = topic_word_tensors[random_topic_indices[i, :], random_word_indices_out[i]]
+
+        v_1 = np.einsum('we, tve->', tw_i, tw_i_shifted)
+        res = -v_1 / (w * w) / n_repeats
+        topic_scores.append(res)
+
+    res = float(np.mean(topic_scores)) if topic_scores else 0.0
+    return res
+
+
+def intruder_shift_equality(
+    embeddings: Dict[str, np.ndarray],
+    topics: List[List[str]],
+    n_repeats: int = 15,
+    random_seed: int = 42,
+) -> float:
+    """
+    Compute the Intruder Shift Equality (ISE) metric for a list of topics.
+    """
+    np.random.seed(random_seed)
+
+    t = len(topics)
+    w = len(topics[0])
+
+    random_topic_indices = np.random.randint(0, t, size=(n_repeats))
+    random_word_indices_in = np.random.randint(0, w, size=(n_repeats))
+    random_word_indices_out = np.random.randint(0, w, size=(n_repeats))
+
+    topic_word_tensors = np.array([[embeddings[w] for w in topic] for topic in topics])
+
+    tw = topic_word_tensors[0]
+
+    # create a tensor of shape (n_repeats, w, e) by tiling tw_i n_repeats times
+    tw_shifted = np.repeat(tw[np.newaxis, :, :], n_repeats, axis=0)
+
+    tw_shifted[np.arange(n_repeats), random_word_indices_in] = topic_word_tensors[random_topic_indices, random_word_indices_out]
+
+    v_1 = np.einsum('we, tve->', tw, tw_shifted)
+    res_1 = -v_1 / (w * w) / n_repeats
+
+    # Now calculate the value using by doing the replacement in a loop
+    res_2 = 0.0
+    t_0 = topic_centroid(topics[0], embeddings)
+    for i in range(n_repeats):
+        tw_shifted_i = np.copy(tw)
+        tw_shifted_i[random_word_indices_in[i]] = topic_word_tensors[random_topic_indices[i], random_word_indices_out[i]]
+        t_shifted = np.mean(tw_shifted_i, axis=0)
+        res_2 += similarity(t_0, t_shifted)
+        
+    res_2 = res_2 / n_repeats
+
+    assert np.isclose(res_1, res_2)
+    
+    return res_1
+
+
 
 def calculate_multiple_topic_models_intruder_shift(
     session: Session,
@@ -296,15 +379,14 @@ def calculate_multiple_topic_models_intruder_shift(
     corpus_name: str,
     top_n_words_per_topic: int = 10,
     n_repeats: int = 1000,
-    force_recompute_stats: bool = False
 ) -> List[dict[str, Any]]:
     """
     Compute Intruder Shift (ISH) for multiple topic models.
     """
     embeddings = get_word_embeddings(session, corpus_name)
     ish_scores = []
-    for topic_model_output in topic_models_outputs:
-        ish_scores.append(calculate_intruder_shift(session, topic_model_output, corpus_name, top_n_words_per_topic, n_repeats, embeddings=embeddings))
+    for topic_model_output in tqdm.tqdm(topic_models_outputs):
+        ish_scores.append(calculate_intruder_shift(embeddings, topic_model_output, n_repeats, random_seed=42))
 
     return [{"score": score} for score in ish_scores]
 
