@@ -285,10 +285,137 @@ def pretty_print_top_models_table(joined: bool = True, top_n: int = 3):
             console.print(table)
             console.print("\n")
 
+def pretty_print_pareto_front_table():
+    """
+    Print a table showing the number of models on the Pareto front for each corpus and number of topics combination.
+    The Pareto front is calculated based on NPMI, WEPS, and ISH metrics.
+    """
+    config = load_config_from_env()
+    console = Console()
+    
+    # Get list of models and corpora
+    models = get_topic_model_list()
+    corpora = get_corpus_list()
+    metrics = ["NPMI", "WEPS", "ISH"]
+    
+    # Get all distinct num_topics values from results
+    with get_session(config.database) as session:
+        query = text("""
+            SELECT DISTINCT r.num_topics 
+            FROM pipeline.topic_model_corpus_result r
+            JOIN pipeline.topic_model_performance p ON r.id = p.topic_model_corpus_result_id
+            ORDER BY r.num_topics
+        """)
+        num_topics_list = [row[0] for row in session.execute(query)]
+    
+    def get_model_metrics(corpus: str, model: str, num_topics: int) -> Dict[str, float]:
+        """Helper function to get all metric values for a model"""
+        metric_values = {}
+        for metric in metrics:
+            with get_session(config.database) as session:
+                query = text("""
+                    SELECT p.metric_value 
+                    FROM pipeline.topic_model_performance p
+                    JOIN pipeline.topic_model_corpus_result r ON p.topic_model_corpus_result_id = r.id
+                    JOIN pipeline.topic_model m ON r.topic_model_id = m.id
+                    JOIN pipeline.corpus c ON r.corpus_id = c.id
+                    WHERE m.name = :model_name
+                    AND c.name = :corpus_name
+                    AND r.num_topics = :num_topics
+                    AND p.metric_name = :metric_name
+                    AND r.soft_delete = false
+                """).bindparams(
+                    model_name=model,
+                    corpus_name=corpus,
+                    num_topics=num_topics,
+                    metric_name=metric
+                )
+                results = session.execute(query).fetchall()
+            
+            if not results:
+                return None
+            
+            # Extract values from JSONB
+            values = []
+            for result in results:
+                metric_value = result[0]
+                if isinstance(metric_value, str):
+                    metric_value = json.loads(metric_value)
+                if isinstance(metric_value, dict):
+                    # If it's a dict, try to get a single numeric value
+                    values.extend([v for v in metric_value.values() if isinstance(v, (int, float))])
+                elif isinstance(metric_value, (int, float)):
+                    values.append(metric_value)
+            
+            if values:
+                metric_values[metric] = np.mean(values)
+            else:
+                return None
+        
+        return metric_values
+    
+    def is_dominated(model_metrics: Dict[str, float], all_metrics: List[Dict[str, float]]) -> bool:
+        """Check if a model is dominated by any other model"""
+        for other_metrics in all_metrics:
+            if other_metrics == model_metrics:
+                continue
+            
+            # A model is dominated if another model is better on all metrics
+            dominated = True
+            for metric in metrics:
+                if metric in ["NPMI", "WEPS"]:  # Higher is better
+                    if other_metrics[metric] <= model_metrics[metric]:
+                        dominated = False
+                        break
+                else:  # ISH - lower is better
+                    if other_metrics[metric] >= model_metrics[metric]:
+                        dominated = False
+                        break
+            
+            if dominated:
+                return True
+        
+        return False
+    
+    # Create the table
+    table = Table(title="Number of Models on Pareto Front")
+    
+    # Add columns
+    table.add_column("Corpus", style="white")
+    for num_topics in num_topics_list:
+        table.add_column(f"Topics={num_topics}")
+    
+    # Add rows
+    for corpus in corpora:
+        row = [corpus]
+        
+        # For each number of topics
+        for num_topics in num_topics_list:
+            # Get metrics for all models
+            all_metrics = []
+            for model in models:
+                metrics = get_model_metrics(corpus, model, num_topics)
+                if metrics:
+                    all_metrics.append(metrics)
+            
+            # Count models on Pareto front
+            pareto_count = 0
+            for metrics in all_metrics:
+                if not is_dominated(metrics, all_metrics):
+                    pareto_count += 1
+            
+            row.append(str(pareto_count))
+        
+        table.add_row(*row)
+    
+    console.print(table)
+    console.print("\n")
+
 if __name__ == '__main__':
     # Example usage
     # pretty_print_metrics_table("NPMI")
     # pretty_print_metrics_table("WEPS")
     # pretty_print_metrics_table("ISH")
-    pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
+    # pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
     # pretty_print_top_models_table(joined=False, top_n=2)  # Separate tables with top 2 models
+    pretty_print_pareto_front_table()  # Show number of models on Pareto front
