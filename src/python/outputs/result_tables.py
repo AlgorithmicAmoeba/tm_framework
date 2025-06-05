@@ -143,3 +143,4 @@ if __name__ == '__main__':
     # Example usage
     pretty_print_metrics_table("NPMI")
     pretty_print_metrics_table("WEPS")
+    pretty_print_metrics_table("ISH")

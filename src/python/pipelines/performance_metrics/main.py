@@ -73,7 +73,7 @@ def main():
         'NPMI': calculate_multiple_topic_models_npmi,
         'WEPS': calculate_multiple_topic_models_weps,
         # 'WECS': calculate_multiple_topic_models_wecs,  same as WEPS for sim = dot product
-        # 'ISH': calculate_multiple_topic_models_intruder_shift,
+        'ISH': calculate_multiple_topic_models_intruder_shift,
     }
 
     with get_session(db_config) as session:
