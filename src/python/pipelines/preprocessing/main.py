@@ -514,7 +514,7 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
         logging.info(f"  TF-IDF vectors deleted: {tfidf_deleted}")
 
 
-def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: dict[str, Any] | None = None):
+def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: dict[str, Any]):
     """
     Preprocess documents for a specified corpus.
     
@@ -527,20 +527,6 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
         Tuple of (vocabulary_size, document_count)
     """
     logging.info(f"Starting preprocessing for corpus: {corpus_name}")
-    
-    # Default parameters if none provided
-    if preprocessing_params is None:
-        preprocessing_params = {
-            'top_n': 10000,
-            'min_words_per_document': 5,
-            'min_df': 0.001,
-            'max_df': 0.7,
-            'min_chars': 3,
-            'remove_stopwords': True,
-            'lemmatize': True,
-            'remove_numbers': True,
-            'remove_urls': True
-        }
     
     # Fetch documents from the corpus
     fetch_docs_query = text("""
@@ -648,23 +634,88 @@ if __name__ == '__main__':
             'remove_stopwords': True,
             'lemmatize': True
         }
+
+        pubmed_params = {
+            'top_n': 10000,
+            'min_words_per_document': 600,
+            'min_df': 0.01,
+            'max_df': 0.3,
+            'min_chars': 3,
+            'remove_stopwords': True,
+            'lemmatize': True
+        }
+        
+        patent_params = {
+            'top_n': 10000,
+            'min_words_per_document': 250,
+            'min_df': 0.005,
+            'max_df': 0.8,
+            'min_chars': 3,
+            'remove_stopwords': True,
+            'lemmatize': True
+        }
+        
+        goodreads_params = {
+            'top_n': 10000,
+            'min_words_per_document': 5,
+            'min_df': 0.005,
+            'max_df': 0.3,
+            'min_chars': 3,
+            'remove_stopwords': True,
+            'lemmatize': True
+        }
+
+        battery_params = {
+            'top_n': 10000,
+            'min_words_per_document': 800,
+            'min_df': 0.005,
+            'max_df': 0.4,
+            'min_chars': 3,
+            'remove_stopwords': True,
+            'lemmatize': True
+        }
+        
+        t2_ragbench_params = {
+            'top_n': 10000,
+            'min_words_per_document': 5,
+            'min_df': 0.01,
+            'max_df': 0.3,
+            'min_chars': 3,
+            'remove_stopwords': True,
+            'lemmatize': True
+        }
         
         # Run preprocessing for each corpus
         logging.info("Starting preprocessing pipelines...")
         
-        logging.info("Preprocessing newsgroups corpus...")
-        preprocess_corpus(session, "newsgroups", newsgroups_params)
+        # logging.info("Preprocessing newsgroups corpus...")
+        # preprocess_corpus(session, "newsgroups", newsgroups_params)
         
-        logging.info("Preprocessing Wikipedia corpus...")
-        preprocess_corpus(session, "wikipedia_sample", wikipedia_params)
+        # logging.info("Preprocessing Wikipedia corpus...")
+        # preprocess_corpus(session, "wikipedia_sample", wikipedia_params)
         
-        logging.info("Preprocessing IMDB reviews corpus...")
-        preprocess_corpus(session, "imdb_reviews", imdb_params)
+        # logging.info("Preprocessing IMDB reviews corpus...")
+        # preprocess_corpus(session, "imdb_reviews", imdb_params)
         
-        logging.info("Preprocessing TREC questions corpus...")
-        preprocess_corpus(session, "trec_questions", trec_params)
+        # logging.info("Preprocessing TREC questions corpus...")
+        # preprocess_corpus(session, "trec_questions", trec_params)
         
-        logging.info("Preprocessing Twitter financial news corpus...")
-        preprocess_corpus(session, "twitter-financial-news", twitter_params)
+        # logging.info("Preprocessing Twitter financial news corpus...")
+        # preprocess_corpus(session, "twitter-financial-news", twitter_params)
+        
+        logging.info("Preprocessing PubMed MultiLabel Text Classification Dataset...")
+        preprocess_corpus(session, "pubmed-multilabel", pubmed_params)
+        
+        logging.info("Preprocessing Patent Classification Dataset...")
+        preprocess_corpus(session, "patent-classification", patent_params)
+        
+        logging.info("Preprocessing Goodreads Book Genres Dataset...")
+        preprocess_corpus(session, "goodreads-bookgenres", goodreads_params)
+        
+        logging.info("Preprocessing Battery Data Paper Abstracts Dataset...")
+        preprocess_corpus(session, "battery-abstracts", battery_params)
+        
+        logging.info("Preprocessing T2-RAGBench ConvFinQA Dataset...")
+        preprocess_corpus(session, "t2-ragbench-convfinqa", t2_ragbench_params)
         
         logging.info("All preprocessing pipelines completed successfully.")
