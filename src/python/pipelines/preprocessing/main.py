@@ -582,31 +582,6 @@ def preprocess_corpus(session: Session, corpus_name: str, preprocessing_params: 
     return filtered_vocab, filtered_count
 
 
-def preprocess_newsgroups(session: Session, preprocessing_params: dict[str, Any] | None = None):
-    """Preprocess 20 Newsgroups corpus."""
-    preprocess_corpus(session, "newsgroups", preprocessing_params)
-
-
-def preprocess_wikipedia(session: Session, preprocessing_params: dict[str, Any] | None = None):
-    """Preprocess Wikipedia corpus."""
-    preprocess_corpus(session, "wikipedia_sample", preprocessing_params)
-
-
-def preprocess_imdb(session: Session, preprocessing_params: dict[str, Any] | None = None):
-    """Preprocess IMDB reviews corpus."""
-    preprocess_corpus(session, "imdb_reviews", preprocessing_params)
-
-
-def preprocess_trec(session: Session, preprocessing_params: dict[str, Any] | None = None):
-    """Preprocess TREC questions corpus."""
-    preprocess_corpus(session, "trec_questions", preprocessing_params)
-
-
-def preprocess_twitter_financial(session: Session, preprocessing_params: dict[str, Any] | None = None):
-    """Preprocess Twitter financial news corpus."""
-    preprocess_corpus(session, "twitter-financial-news", preprocessing_params)
-
-
 if __name__ == '__main__':
     # Configure logging
     logging.basicConfig(
@@ -678,18 +653,18 @@ if __name__ == '__main__':
         logging.info("Starting preprocessing pipelines...")
         
         logging.info("Preprocessing newsgroups corpus...")
-        preprocess_newsgroups(session, newsgroups_params)
+        preprocess_corpus(session, "newsgroups", newsgroups_params)
         
         logging.info("Preprocessing Wikipedia corpus...")
-        preprocess_wikipedia(session, wikipedia_params)
+        preprocess_corpus(session, "wikipedia_sample", wikipedia_params)
         
         logging.info("Preprocessing IMDB reviews corpus...")
-        preprocess_imdb(session, imdb_params)
+        preprocess_corpus(session, "imdb_reviews", imdb_params)
         
         logging.info("Preprocessing TREC questions corpus...")
-        preprocess_trec(session, trec_params)
+        preprocess_corpus(session, "trec_questions", trec_params)
         
         logging.info("Preprocessing Twitter financial news corpus...")
-        preprocess_twitter_financial(session, twitter_params)
+        preprocess_corpus(session, "twitter-financial-news", twitter_params)
         
         logging.info("All preprocessing pipelines completed successfully.")
