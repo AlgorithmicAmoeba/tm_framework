@@ -292,31 +292,6 @@ def chunk_corpus(
     return doc_count, chunk_count, avg_chunks_per_doc
 
 
-def chunk_newsgroups(session: Session, max_tokens: int):
-    """Chunk 20 Newsgroups corpus."""
-    chunk_corpus(session, "newsgroups", max_tokens)
-
-
-def chunk_wikipedia(session: Session, max_tokens: int):
-    """Chunk Wikipedia corpus."""
-    chunk_corpus(session, "wikipedia_sample", max_tokens)
-
-
-def chunk_imdb(session: Session, max_tokens: int):
-    """Chunk IMDB reviews corpus."""
-    chunk_corpus(session, "imdb_reviews", max_tokens)
-
-
-def chunk_trec(session: Session, max_tokens: int):
-    """Chunk TREC questions corpus."""
-    chunk_corpus(session, "trec_questions", max_tokens)
-
-
-def chunk_twitter_financial(session: Session, max_tokens: int):
-    """Chunk Twitter financial news corpus."""
-    chunk_corpus(session, "twitter-financial-news", max_tokens)
-
-
 if __name__ == '__main__':
     # Configure logging
     logging.basicConfig(
@@ -336,19 +311,34 @@ if __name__ == '__main__':
         # Run chunking for each corpus
         logging.info("Starting chunking pipelines...")
         
-        logging.info("Chunking newsgroups corpus...")
-        chunk_newsgroups(session, max_tokens=max_tokens)
+        # logging.info("Chunking newsgroups corpus...")
+        # chunk_corpus(session, "newsgroups", max_tokens=max_tokens)
         
-        logging.info("Chunking Wikipedia corpus...")
-        chunk_wikipedia(session, max_tokens=max_tokens)
+        # logging.info("Chunking Wikipedia corpus...")
+        # chunk_corpus(session, "wikipedia_sample", max_tokens=max_tokens)
         
-        logging.info("Chunking IMDB reviews corpus...")
-        chunk_imdb(session, max_tokens=max_tokens)
+        # logging.info("Chunking IMDB reviews corpus...")
+        # chunk_corpus(session, "imdb_reviews", max_tokens=max_tokens)
         
-        logging.info("Chunking TREC questions corpus...")
-        chunk_trec(session, max_tokens=max_tokens)
+        # logging.info("Chunking TREC questions corpus...")
+        # chunk_corpus(session, "trec_questions", max_tokens=max_tokens)
         
-        logging.info("Chunking Twitter financial news corpus...")
-        chunk_twitter_financial(session, max_tokens=max_tokens)
+        # logging.info("Chunking Twitter financial news corpus...")
+        # chunk_corpus(session, "twitter-financial-news", max_tokens=max_tokens)
+
+        logging.info("Chunking PubMed MultiLabel Text Classification Dataset...")
+        chunk_corpus(session, "pubmed-multilabel", max_tokens=max_tokens)
+        
+        logging.info("Chunking Patent Classification Dataset...")
+        chunk_corpus(session, "patent-classification", max_tokens=max_tokens)
+        
+        logging.info("Chunking Goodreads Book Genres Dataset...")
+        chunk_corpus(session, "goodreads-bookgenres", max_tokens=max_tokens)
+        
+        logging.info("Chunking Battery Data Paper Abstracts Dataset...")
+        chunk_corpus(session, "battery-abstracts", max_tokens=max_tokens)
+        
+        logging.info("Chunking T2-RAGBench ConvFinQA Dataset...")
+        chunk_corpus(session, "t2-ragbench-convfinqa", max_tokens=max_tokens)
         
         logging.info("All chunking pipelines completed successfully.")
