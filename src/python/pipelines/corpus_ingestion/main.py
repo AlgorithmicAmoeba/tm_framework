@@ -110,8 +110,6 @@ def store_corpus_documents(session: Session, corpus_name: str, texts: list[str],
         )
         docs_deleted += 1
 
-    session.commit()
-    
     total_documents = docs_existing + docs_inserted
     
     logging.info(f"Corpus '{corpus_name}' processing complete:")
@@ -120,6 +118,10 @@ def store_corpus_documents(session: Session, corpus_name: str, texts: list[str],
     logging.info(f"  Documents deleted: {docs_deleted}")
     logging.info(f"  Total documents in corpus: {total_documents}")
     
+    session.commit()
+
+    logging.info(f"Corpus '{corpus_name}' committed.")
+
     return total_documents
 
 
@@ -268,6 +270,153 @@ def ingest_twitter_financial(session: Session, subset: int | None = None, descri
     return store_corpus_documents(session, "twitter-financial-news", texts, description)
 
 
+def ingest_pubmed_multilabel(session: Session, subset: int | None = None, description: str | None = None):
+    """
+    Ingest PubMed MultiLabel Text Classification Dataset.
+    
+    Args:
+        session: Database session
+        subset: Optional number of documents to ingest
+        description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
+    """
+    import pandas as pd
+    
+    df = pd.read_csv("hf://datasets/owaiskha9654/PubMed_MultiLabel_Text_Classification_Dataset_MeSH/PubMed Multi Label Text Classification Dataset Processed.csv")
+    
+    text_field = "abstractText"
+    
+    texts = df[text_field].dropna().tolist()
+    
+    if subset is not None:
+        texts = texts[:subset]
+    
+    if description is None:
+        description = "PubMed MultiLabel Text Classification Dataset with MeSH terms"
+    
+    return store_corpus_documents(session, "pubmed-multilabel", texts, description)
+
+
+def ingest_patent_classification(session: Session, subset: int | None = None, description: str | None = None):
+    """
+    Ingest Patent Classification Dataset.
+    
+    Args:
+        session: Database session
+        subset: Optional number of documents to ingest
+        description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
+    """
+    import pandas as pd
+    
+    splits = {'train': 'abstract/train-00000-of-00001.parquet', 'validation': 'abstract/validation-00000-of-00001.parquet', 'test': 'abstract/test-00000-of-00001.parquet'}
+    df = pd.read_parquet("hf://datasets/ccdv/patent-classification/" + splits["train"])
+    
+    text_field = "text"
+    
+    texts = df[text_field].dropna().tolist()
+    
+    if subset is not None:
+        texts = texts[:subset]
+    
+    if description is None:
+        description = "Patent Classification Dataset - patent abstracts"
+    
+    return store_corpus_documents(session, "patent-classification", texts, description)
+
+
+def ingest_goodreads_bookgenres(session: Session, subset: int | None = None, description: str | None = None):
+    """
+    Ingest Goodreads Book Genres Dataset.
+    
+    Args:
+        session: Database session
+        subset: Optional number of documents to ingest
+        description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
+    """
+    import pandas as pd
+    
+    df = pd.read_parquet("hf://datasets/pszemraj/goodreads-bookgenres/original-genres/train-00000-of-00001-c455a46e182d5be7.parquet")
+    
+    text_field = "Description"
+    
+    texts = df[text_field].dropna().tolist()
+    
+    if subset is not None:
+        texts = texts[:subset]
+    
+    if description is None:
+        description = "Goodreads Book Genres Dataset - book descriptions and genres"
+    
+    return store_corpus_documents(session, "goodreads-bookgenres", texts, description)
+
+
+def ingest_battery_abstracts(session: Session, subset: int | None = None, description: str | None = None):
+    """
+    Ingest Battery Data Paper Abstracts Dataset.
+    
+    Args:
+        session: Database session
+        subset: Optional number of documents to ingest
+        description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
+    """
+    import pandas as pd
+    
+    splits = {'train': 'training_data.csv', 'validation': 'valid.csv', 'test': 'test_data.csv'}
+    df = pd.read_csv("hf://datasets/batterydata/paper-abstracts/" + splits["train"])
+    
+    text_field = "abstract"
+    
+    texts = df[text_field].dropna().tolist()
+    
+    if subset is not None:
+        texts = texts[:subset]
+    
+    if description is None:
+        description = "Battery Data Paper Abstracts Dataset - research paper abstracts"
+    
+    return store_corpus_documents(session, "battery-abstracts", texts, description)
+
+
+def ingest_t2_ragbench_convfinqa(session: Session, subset: int | None = None, description: str | None = None):
+    """
+    Ingest T2-RAGBench ConvFinQA Dataset.
+    
+    Args:
+        session: Database session
+        subset: Optional number of documents to ingest
+        description: Optional description of the corpus
+        
+    Returns:
+        Number of documents ingested
+    """
+    import pandas as pd
+    
+    df = pd.read_json("hf://datasets/G4KMU/t2-ragbench/data/ConvFinQA/turn_0.jsonl", lines=True)
+    
+    text_field = "context"
+    
+    texts = df[text_field].dropna().tolist()
+    
+    if subset is not None:
+        texts = texts[:subset]
+    
+    if description is None:
+        description = "T2-RAGBench ConvFinQA Dataset - conversational financial Q&A"
+    
+    return store_corpus_documents(session, "t2-ragbench-convfinqa", texts, description)
+
+
 if __name__ == '__main__':
     # Configure logging
     logging.basicConfig(
@@ -287,7 +436,6 @@ if __name__ == '__main__':
     
     # Create database session
     with get_session(db_config) as session:
-        # Example usage of the ingestion functions
         logging.info("Ingesting newsgroups corpus...")
         ingest_newsgroups(session)
         
@@ -305,5 +453,20 @@ if __name__ == '__main__':
         
         logging.info("Ingesting Twitter financial news corpus...")
         ingest_twitter_financial(session)
+        
+        logging.info("Ingesting PubMed MultiLabel Text Classification Dataset...")
+        ingest_pubmed_multilabel(session)
+        
+        logging.info("Ingesting Patent Classification Dataset...")
+        ingest_patent_classification(session)
+        
+        logging.info("Ingesting Goodreads Book Genres Dataset...")
+        ingest_goodreads_bookgenres(session)
+        
+        logging.info("Ingesting Battery Data Paper Abstracts Dataset...")
+        ingest_battery_abstracts(session)
+        
+        logging.info("Ingesting T2-RAGBench ConvFinQA Dataset...")
+        ingest_t2_ragbench_convfinqa(session)
         
         logging.info("All corpora successfully ingested.")
