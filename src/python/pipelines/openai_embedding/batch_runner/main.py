@@ -83,7 +83,7 @@ async def main():
     client = openai.Client(api_key=openai_config.api_key)
     
     # Define paths
-    batch_dir = pathlib.Path(config.get_data_path() / "embeddings" / "batches")
+    batch_dir = pathlib.Path(config.get_data_path() / "embeddings" / "batches_02")
     cache_path = pathlib.Path(config.get_data_path() / "embeddings" / "cache.db")
     
     # Create database session
@@ -101,23 +101,24 @@ async def main():
         chunks, texts = create_chunks_from_jobs(jobs)
         
         # Create batch files
-        # log.info("Creating batch files...")
-        # create_batch_files(
-        #     chunks=chunks,
-        #     batch_dir=batch_dir,
-        #     texts=texts
-        # )
+        log.info("Creating batch files...")
+        create_batch_files(
+            chunks=chunks,
+            batch_dir=batch_dir,
+            texts=texts
+        )
         
         # Submit batches
-        # log.info("Submitting batches to OpenAI...")
-        # submit_batches(client, batch_dir)
+        log.info("Submitting batches to OpenAI...")
+        submit_batches(client, batch_dir)
         
         # Check batch status until complete
         while True:
             status_counts = check_batch_status(client, batch_dir)
             log.info(f"Batch status: {status_counts}")
             
-            if status_counts.get("pending", 0) == 0 and status_counts.get("processing", 0) == 0 and status_counts.get("in_progress", 0) == 0:
+            statuses = ["pending", "processing", "in_progress", "validating"]
+            if all(status_counts.get(status, 0) == 0 for status in statuses):
                 break
                 
             await asyncio.sleep(300)  # Wait 5 minute before checking again
