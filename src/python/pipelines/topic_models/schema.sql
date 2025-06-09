@@ -18,14 +18,29 @@ INSERT INTO pipeline.topic_model (name, description)
 VALUES ('BERTopic', 'BERTopic model using sentence transformers and clustering')
 ON CONFLICT (name) DO NOTHING;
 
+-- Insert BERTopic_sbert as a topic model
+INSERT INTO pipeline.topic_model (name, description) 
+VALUES ('BERTopic_sbert', 'BERTopic model using sentence transformers and clustering with SBERT embeddings')
+ON CONFLICT (name) DO NOTHING;
+
 -- Insert ZeroShotTM as a topic model
 INSERT INTO pipeline.topic_model (name, description) 
 VALUES ('ZeroShotTM', 'ZeroShotTM model using sentence transformers and clustering')
 ON CONFLICT (name) DO NOTHING;
 
+-- Insert ZeroShotTM_sbert as a topic model
+INSERT INTO pipeline.topic_model (name, description) 
+VALUES ('ZeroShotTM_sbert', 'ZeroShotTM model using sentence transformers and clustering with SBERT embeddings')
+ON CONFLICT (name) DO NOTHING;
+
 -- Insert CombinedTM as a topic model
 INSERT INTO pipeline.topic_model (name, description) 
 VALUES ('CombinedTM', 'CombinedTM model using sentence transformers and clustering')
+ON CONFLICT (name) DO NOTHING;
+
+-- Insert CombinedTM_sbert as a topic model
+INSERT INTO pipeline.topic_model (name, description) 
+VALUES ('CombinedTM_sbert', 'CombinedTM model using sentence transformers and clustering with SBERT embeddings')
 ON CONFLICT (name) DO NOTHING;
 
 -- Insert KeyNMF as a topic model
@@ -41,6 +56,11 @@ ON CONFLICT (name) DO NOTHING;
 -- Insert GMM as a topic model
 INSERT INTO pipeline.topic_model (name, description) 
 VALUES ('GMM', 'GMM model using sentence transformers and clustering')
+ON CONFLICT (name) DO NOTHING;
+
+-- Insert NMF as a topic model
+INSERT INTO pipeline.topic_model (name, description) 
+VALUES ('NMF', 'NMF model using sentence transformers and clustering')
 ON CONFLICT (name) DO NOTHING;
 
 CREATE TABLE pipeline.topic_model_corpus_result (
