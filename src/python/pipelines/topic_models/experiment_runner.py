@@ -6,6 +6,7 @@ import logging
 
 from configuration import load_config_from_env
 from database import get_session
+from pipelines.topic_models.nmf import run_nmf_pipeline
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -113,7 +114,7 @@ def pretty_print_model_corpus_table():
         console.print("\n")
 
 
-def run_experiments(num_topics: int = 20, target_results: int = 10):
+def run_experiments(num_topics: int = 20, target_results: int = 10, with_pretty_print: bool = False):
     """
     Run all topic models against all corpora until target number of results is reached
     
@@ -121,6 +122,7 @@ def run_experiments(num_topics: int = 20, target_results: int = 10):
         num_topics: Number of topics to extract
         num_iterations: Number of times to run each model
         target_results: Target number of non-soft-deleted results per corpus-model pair
+        with_pretty_print: Whether to print the table of results after running experiments
     """
     config = load_config_from_env()
     corpora = get_corpus_list()
@@ -142,39 +144,55 @@ def run_experiments(num_topics: int = 20, target_results: int = 10):
     pbar = tqdm(total=total_pairs, desc="Running experiments")
     
     for model_name, corpus_name in itertools.product(models, corpora):
-        # if model_name == "BERTopic":
-        #     pbar.update(1)
-        #     continue
+        models_to_skip = []
+        if model_name in models_to_skip:
+            pbar.update(1)
+            continue
 
         # Check how many results we already have
         existing_results = count_existing_results(corpus_name, model_name, num_topics, config)
         
-        if existing_results < target_results:
-            # Calculate how many more iterations we need
-            iterations_to_run = target_results - existing_results
 
-            # Update pbar
-            pbar.set_description(f"Running {model_name} on {corpus_name} (iterations: {iterations_to_run})")
-            
-            # Run the appropriate pipeline
-            try:
-                if model_name == 'LDA':
-                    run_lda_pipeline(corpus_name, num_topics, iterations_to_run)
-                elif model_name == 'BERTopic':
-                    run_bertopic_pipeline(corpus_name, num_topics, iterations_to_run)
-                elif model_name == 'ZeroShotTM':
-                    run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=False)
-                elif model_name == 'CombinedTM':
-                    run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=True)
-                elif model_name == 'KeyNMF':
-                    run_keynmf_pipeline(corpus_name, num_topics, iterations_to_run)
-                elif model_name == 'SemanticSignalSeparation':
-                    run_s3_pipeline(corpus_name, num_topics, iterations_to_run)
-                elif model_name == 'GMM':
-                    run_gmm_pipeline(corpus_name, num_topics, iterations_to_run)
-            except Exception as e:
-                logging.exception(f"Error running {model_name} on {corpus_name}")
+        # Calculate how many more iterations we need
+        iterations_to_run = target_results - existing_results
+
+        if iterations_to_run <= 0:
+            pbar.update(1)
+            continue
         
+        # Update pbar
+        pbar.set_description(f"Running {model_name} on {corpus_name} with {num_topics} topics (iterations: {iterations_to_run})")
+
+        # Run the appropriate pipeline
+        try:
+            if model_name == 'LDA':
+                run_lda_pipeline(corpus_name, num_topics, iterations_to_run)
+            elif model_name == 'BERTopic':
+                run_bertopic_pipeline(corpus_name, num_topics, iterations_to_run)
+            elif model_name == 'ZeroShotTM':
+                run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=False)
+            elif model_name == 'CombinedTM':
+                run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=True)
+            elif model_name == 'KeyNMF':
+                run_keynmf_pipeline(corpus_name, num_topics, iterations_to_run)
+            elif model_name == 'SemanticSignalSeparation':
+                run_s3_pipeline(corpus_name, num_topics, iterations_to_run)
+            elif model_name == 'GMM':
+                run_gmm_pipeline(corpus_name, num_topics, iterations_to_run)
+            elif model_name == 'NMF':
+                run_nmf_pipeline(corpus_name, num_topics, iterations_to_run)
+            elif model_name == 'BERTopic_sbert':
+                run_bertopic_pipeline(corpus_name, num_topics, iterations_to_run, embedding_type='sbert')
+            elif model_name == 'ZeroShotTM_sbert':
+                run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=False, embedding_type='sbert')
+            elif model_name == 'CombinedTM_sbert':
+                run_autoencoding_tm_pipeline(corpus_name, num_topics, iterations_to_run, combined=True, embedding_type='sbert')
+        except Exception as e:
+            logging.exception(f"Error running {model_name} on {corpus_name}")
+        
+        if with_pretty_print:
+            pretty_print_model_corpus_table()
+
         pbar.update(1)
     
     pbar.close()
@@ -195,7 +213,8 @@ if __name__ == '__main__':
     for num_topics in num_topicss:
         run_experiments(
             num_topics=num_topics,
-            target_results=10
+            target_results=10,
+            with_pretty_print=True,
         )
         logging.info(f"Finished running experiments for {num_topics} topics")
 
