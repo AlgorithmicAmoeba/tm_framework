@@ -21,9 +21,10 @@ def make_sbert_embeddings():
     # Load the data: find chunks in pipeline.chunked_document that are not in pipeline.sbert_chunk_embedding
     with get_session(db_config) as session:
         query = text("""
-            SELECT chunk_hash, content
-            FROM pipeline.chunked_document
-            WHERE chunk_hash NOT IN (SELECT chunk_hash FROM pipeline.sbert_chunk_embedding)
+            SELECT cd.chunk_hash, cd.content
+            FROM pipeline.chunked_document cd
+            LEFT JOIN pipeline.sbert_chunk_embedding se ON cd.chunk_hash = se.chunk_hash
+            WHERE se.chunk_hash IS NULL
         """)
         result_iter = session.execute(query)
 
@@ -31,8 +32,9 @@ def make_sbert_embeddings():
     with get_session(db_config) as session:
         count_query = text("""
             SELECT COUNT(*)
-            FROM pipeline.chunked_document
-            WHERE chunk_hash NOT IN (SELECT chunk_hash FROM pipeline.sbert_chunk_embedding)
+            FROM pipeline.chunked_document cd
+            LEFT JOIN pipeline.sbert_chunk_embedding se ON cd.chunk_hash = se.chunk_hash
+            WHERE se.chunk_hash IS NULL
         """)
         total_count = session.execute(count_query).scalar()
 
@@ -64,4 +66,3 @@ def make_sbert_embeddings():
 
 if __name__ == "__main__":
     make_sbert_embeddings()
-        
