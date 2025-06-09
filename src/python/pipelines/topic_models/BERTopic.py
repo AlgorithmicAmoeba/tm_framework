@@ -100,10 +100,17 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
             raise ValueError(f"Corpus not found: {corpus_name}")
         
         # Get BERTopic model ID
+        if embedding_type == "openai":
+            model_name = "BERTopic"
+        elif embedding_type == "sbert":
+            model_name = "BERTopic_sbert"
+        else:
+            raise ValueError(f"Invalid embedding type: {embedding_type}")
+
         query = text("""
             SELECT id FROM pipeline.topic_model 
-            WHERE name = 'BERTopic'
-        """)
+            WHERE name = :model_name
+        """).bindparams(model_name=model_name)
         model_id = session.execute(query).scalar()
         
         if not model_id:

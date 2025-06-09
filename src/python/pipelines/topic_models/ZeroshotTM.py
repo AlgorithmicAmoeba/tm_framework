@@ -114,7 +114,13 @@ def run_autoencoding_tm_pipeline(corpus_name: str, num_topics: int = 20, num_ite
             raise ValueError(f"Corpus not found: {corpus_name}")
         
         # Get model ID based on whether we're using CombinedTM or ZeroShotTM
-        model_name = "CombinedTM" if combined else "ZeroShotTM"
+        if embedding_type == "openai":
+            model_name = "CombinedTM" if combined else "ZeroShotTM"
+        elif embedding_type == "sbert":
+            model_name = "CombinedTM_sbert" if combined else "ZeroShotTM_sbert"
+        else:
+            raise ValueError(f"Invalid embedding type: {embedding_type}")
+
         query = text("""
             SELECT id FROM pipeline.topic_model 
             WHERE name = :model_name
