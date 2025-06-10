@@ -105,7 +105,7 @@ def get_model_colors(models: List[str]) -> Dict[str, str]:
     colors = [
         "red", "green", "blue", "yellow", "magenta", "cyan",
         "bright_red", "bright_green", "bright_blue", "bright_yellow",
-        "bright_magenta", "bright_cyan", "white", "bright_white"
+        "bright_cyan", "white", "bright_white", "bright_magenta"
     ]
     return {model: color for model, color in zip(models, colors)}
 
@@ -139,14 +139,16 @@ def is_dominated(
         
         dominated = True
         for metric in metrics:
-            if metric in ["NPMI", "WEPS"]:  # Higher is better
+            if metric in ["NPMI", "WEPS", "WECS"]:  # Higher is better
                 if other_metrics[metric] <= model_metrics[metric]:
                     dominated = False
                     break
-            else:  # ISH - lower is better
+            elif metric in ["ISH"]:  # ISH - lower is better
                 if other_metrics[metric] >= model_metrics[metric]:
                     dominated = False
                     break
+            else:
+                raise ValueError(f"Invalid metric: {metric}")
         
         if dominated:
             return True
@@ -221,7 +223,7 @@ def pretty_print_top_models_table(joined: bool = True, top_n: int = 3):
     # Get list of models and corpora
     models = get_topic_model_list()
     corpora = get_corpus_list()
-    metrics = ["NPMI", "WEPS", "ISH"]
+    metrics = ["NPMI", "WEPS", "WECS", "ISH"]
     num_topics_list = get_num_topics_list()
     
     # Get model colors
@@ -309,7 +311,7 @@ def pretty_print_pareto_front_table():
     # Get list of models and corpora
     models = get_topic_model_list()
     corpora = get_corpus_list()
-    metrics = ["NPMI", "WEPS", "ISH"]
+    metrics = ["NPMI", "WEPS", "WECS", "ISH"]
     num_topics_list = get_num_topics_list()
     
     # Create the table
@@ -357,7 +359,7 @@ def pretty_print_model_points_table():
     # Get list of models and corpora
     models = get_topic_model_list()
     corpora = get_corpus_list()
-    metrics = ["NPMI", "WEPS", "ISH"]
+    metrics = ["NPMI", "WEPS", "WECS", "ISH"]
     num_topics_list = get_num_topics_list()
     
     # Initialize points dictionary for each model and metric
@@ -386,12 +388,14 @@ def pretty_print_model_points_table():
     
     # Create the table
     table = Table(title="Points by Model and Metric")
+
+    normalization_constant = len(corpora) * len(num_topics_list)
     
     # Add columns
     table.add_column("Model", style="white")
     for metric in metrics:
         table.add_column(metric, justify="right")
-    table.add_column("Total", justify="right")
+    table.add_column("Average", justify="right")
     
     # Calculate total points for each model
     model_totals = {
@@ -406,8 +410,8 @@ def pretty_print_model_points_table():
     for model, _ in sorted_models:
         row = [model]
         for metric in metrics:
-            row.append(f"{model_points[model][metric]:.1f}")
-        row.append(f"{model_totals[model]:.1f}")
+            row.append(f"{model_points[model][metric]/normalization_constant:.3f}")
+        row.append(f"{model_totals[model]/normalization_constant/len(metrics):.3f}")
         table.add_row(*row)
     
     console.print(table)
@@ -416,6 +420,7 @@ def pretty_print_model_points_table():
 if __name__ == '__main__':
     # Example usage
     # pretty_print_metrics_table("NPMI")
+    # pretty_print_metrics_table("WECS")
     # pretty_print_metrics_table("WEPS")
     # pretty_print_metrics_table("ISH")
     # pretty_print_top_models_table(joined=False, top_n=2)  # Separate tables with top 2 models

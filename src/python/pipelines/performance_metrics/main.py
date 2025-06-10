@@ -72,7 +72,7 @@ def main():
     metrics = {
         'NPMI': calculate_multiple_topic_models_npmi,
         'WEPS': calculate_multiple_topic_models_weps,
-        # 'WECS': calculate_multiple_topic_models_wecs,  same as WEPS for sim = dot product
+        'WECS': calculate_multiple_topic_models_wecs,
         'ISH': calculate_multiple_topic_models_intruder_shift,
     }
 
