@@ -106,12 +106,12 @@ def calculate_corpus_weps(
     
     topics_tensor = np.array([[embeddings[w] for w in topic] for topic in topics])
 
-    v_1 = np.einsum('twe,sve->', topics_tensor, topics_tensor)
-    v_2 = np.einsum('twe,twe->', topics_tensor, topics_tensor)
+    v_1 = np.einsum('twe,sve->', topics_tensor, topics_tensor)  # TODO: should be 'twe,tve->' then is is COH / WECS
+    v_2 = np.einsum('twe,twe->', topics_tensor, topics_tensor)  # TODO: for WEPS this is not needed
     
     w = len(topics[0])
     t = len(topics)
-    res = -(v_1 - v_2) / (w * w) / (t * t)
+    res = -(v_1 - v_2) / (w * w) / (t * t)  # TODO: might need to be -(v1 - v2) / (w * (w-1)) / t
     
     return res
 
