@@ -1,3 +1,4 @@
+import pandas as pd
 from rich.console import Console
 from rich.table import Table
 from sqlalchemy import text
@@ -348,7 +349,7 @@ def pretty_print_pareto_front_table():
     console.print(table)
     console.print("\n")
 
-def pretty_print_model_points_table():
+def pretty_print_model_points_table(output_latex: bool = False):
     """
     Print a table showing the total points for each model broken down by metric.
     Points are calculated by ranking models from 1 to N for each corpus, num_topics pair,
@@ -385,37 +386,62 @@ def pretty_print_model_points_table():
                 # Award points based on rank
                 for rank, (model, _) in enumerate(sorted_models, 1):
                     model_points[model][metric] += 1.0 / rank
-    
-    # Create the table
-    table = Table(title="Points by Model and Metric")
 
-    normalization_constant = len(corpora) * len(num_topics_list)
-    
-    # Add columns
-    table.add_column("Model", style="white")
-    for metric in metrics:
-        table.add_column(metric, justify="right")
-    table.add_column("Average", justify="right")
-    
     # Calculate total points for each model
     model_totals = {
         model: sum(points.values())
         for model, points in model_points.items()
     }
     
-    # Sort models by total points
-    sorted_models = sorted(model_totals.items(), key=lambda x: x[1], reverse=True)
-    
-    # Add rows
-    for model, _ in sorted_models:
-        row = [model]
+    def console_table():
+        # Create the table
+        table = Table(title="Points by Model and Metric")
+
+        normalization_constant = len(corpora) * len(num_topics_list)
+        
+        # Add columns
+        table.add_column("Model", style="white")
         for metric in metrics:
-            row.append(f"{model_points[model][metric]/normalization_constant:.3f}")
-        row.append(f"{model_totals[model]/normalization_constant/len(metrics):.3f}")
-        table.add_row(*row)
+            table.add_column(metric, justify="right")
+        table.add_column("Average", justify="right")
+        
+        # Sort models by total points
+        sorted_models = sorted(model_totals.items(), key=lambda x: x[1], reverse=True)
+        
+        # Add rows
+        for model, _ in sorted_models:
+            row = [model]
+            for metric in metrics:
+                row.append(f"{model_points[model][metric]/normalization_constant:.3f}")
+            row.append(f"{model_totals[model]/normalization_constant/len(metrics):.3f}")
+            table.add_row(*row)
+
+        console.print(table)
+        console.print("\n")
+
+
+    def latex_table():
+        # build pandas dataframe
+        model_points_dict = {model.replace("_", "-"): points for model, points in model_points.items()}
+        df = pd.DataFrame(model_points_dict)
+
+        # transpose dataframe
+        df = df.T
+
+        # set index to models
+        df["Total"] = model_totals
+        df = df.sort_values(by="Total", ascending=False)
+
+        # truncate all values to 4 significant figures
+        df = df.map(lambda x: f"{x:.3g}")
+
+        # print latex table
+        print(df.drop(columns=["Total"]).to_latex(index=True))
     
-    console.print(table)
-    console.print("\n")
+    if output_latex:
+        latex_table()
+    else:
+        console_table()
 
 if __name__ == '__main__':
     # Example usage
@@ -424,6 +450,6 @@ if __name__ == '__main__':
     # pretty_print_metrics_table("WEPS")
     # pretty_print_metrics_table("ISH")
     # pretty_print_top_models_table(joined=False, top_n=2)  # Separate tables with top 2 models
-    pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
-    pretty_print_pareto_front_table()  # Show number of models on Pareto front
-    pretty_print_model_points_table()  # Show points by model and metric
+    # pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
+    # pretty_print_pareto_front_table()  # Show number of models on Pareto front
+    pretty_print_model_points_table(output_latex=True)  # Show points by model and metric
