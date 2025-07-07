@@ -1,3 +1,4 @@
+import functools
 import pandas as pd
 from rich.console import Console
 from rich.table import Table
@@ -16,6 +17,18 @@ def get_corpus_list() -> List[str]:
         query = text("SELECT name FROM pipeline.corpus")
         result = session.execute(query)
         return [row[0] for row in result]
+    
+def pretty_model_name(model_name: str) -> str:
+    """Pretty print a model name"""
+    replace_dict = {
+        "SemanticSignalSeparation": "S3",
+    }
+    # replace names in results with replace_dict
+    model_name = replace_dict.get(model_name, model_name)
+
+    # replace _ with -
+    model_name = model_name.replace("_", "-")
+    return model_name
 
 def get_topic_model_list() -> List[str]:
     """Get list of all topic models from the database"""
@@ -47,6 +60,7 @@ def extract_metric_values(metric_value: Any) -> List[float]:
         return [metric_value]
     return []
 
+@functools.lru_cache
 def get_model_metrics_for_corpus(
     model: str,
     corpus: str,
@@ -364,8 +378,13 @@ def pretty_print_model_points_table(output_latex: bool = False):
     num_topics_list = get_num_topics_list()
     
     # Initialize points dictionary for each model and metric
-    model_points = {
+    model_points_total = {
         model: {metric: 0.0 for metric in metrics}
+        for model in models
+    }
+
+    model_points_num = {
+        model: {metric: 0 for metric in metrics}
         for model in models
     }
     
@@ -385,7 +404,15 @@ def pretty_print_model_points_table(output_latex: bool = False):
                 
                 # Award points based on rank
                 for rank, (model, _) in enumerate(sorted_models, 1):
-                    model_points[model][metric] += 1.0 / rank
+                    model_points_total[model][metric] += 1.0 / rank
+                    model_points_num[model][metric] += 1
+
+
+    # calculate average points for each model
+    model_points = {
+        model: {metric: model_points_total[model][metric] / model_points_num[model][metric] for metric in metrics}
+        for model in models
+    }
 
     # Calculate total points for each model
     model_totals = {
@@ -429,19 +456,201 @@ def pretty_print_model_points_table(output_latex: bool = False):
         df = df.T
 
         # set index to models
-        df["Total"] = model_totals
-        df = df.sort_values(by="Total", ascending=False)
+        df["Average"] = [model_totals[model] / len(metrics) for model in models]
+        df = df.sort_values(by="Average", ascending=False)
 
-        # truncate all values to 4 significant figures
-        df = df.map(lambda x: f"{x:.3g}")
+        # truncate all values to 3 significant figures
+        df = df.map(lambda x: f"{x:.3f}")
 
         # print latex table
-        print(df.drop(columns=["Total"]).to_latex(index=True))
+        print(df.to_latex(index=True))
     
     if output_latex:
         latex_table()
     else:
         console_table()
+
+def find_coolest_pareto_plot(max_points_on_front: int | None = None):
+    """
+    Find the (dataset, num_topics) pair that has the most models on some 2-metric Pareto front.
+    """
+    console = Console()
+    
+    # Get list of models and corpora
+    models = get_topic_model_list()
+    corpora = get_corpus_list()
+    # metrics = ["NPMI", "WEPS", "WECS", "ISH"]
+    metrics = ["WEPS", "WECS", "ISH"]
+    num_topics_list = get_num_topics_list()
+    
+    # Generate all possible 2-metric combinations
+    metric_combinations = []
+    for i in range(len(metrics)):
+        for j in range(i + 1, len(metrics)):
+            metric_combinations.append((metrics[i], metrics[j]))
+    
+    best_combination = None
+    max_pareto_count = 0
+    best_metrics = None
+    
+    # Check each corpus, num_topics, and metric combination
+    for corpus in corpora:
+        for num_topics in num_topics_list:
+            for metric1, metric2 in metric_combinations:
+                # Get metrics for all models
+                all_metrics = []
+                for model in models:
+                    metrics_dict = get_model_metrics_all(corpus, model, num_topics, [metric1, metric2])
+                    if metrics_dict:
+                        all_metrics.append(metrics_dict)
+                
+                # Count models on Pareto front for this 2-metric combination
+                pareto_count = 0
+                for model_metrics in all_metrics:
+                    if not is_dominated(model_metrics, all_metrics, [metric1, metric2]):
+                        pareto_count += 1
+                
+                # Update best if this combination has more models on Pareto front
+                if pareto_count > max_pareto_count and (max_points_on_front is None or pareto_count <= max_points_on_front):
+                    max_pareto_count = pareto_count
+                    best_combination = (corpus, num_topics)
+                    best_metrics = (metric1, metric2)
+    
+    if not best_combination:
+        console.print("[red]No valid combinations found[/red]")
+        return None, None, 0, []
+    
+
+    corpus, num_topics = best_combination
+    metric1, metric2 = best_metrics
+    
+    console.print(f"[bold green]Best Pareto Plot Configuration:[/bold green]")
+    console.print(f"Dataset: [cyan]{corpus}[/cyan]")
+    console.print(f"Number of Topics: [cyan]{num_topics}[/cyan]")
+    console.print(f"Metrics: [cyan]{metric1}[/cyan] vs [cyan]{metric2}[/cyan]")
+    console.print(f"Models on Pareto Front: [yellow]{max_pareto_count}[/yellow]")
+    
+    # Show which models are on the Pareto front
+    all_metrics = []
+    pareto_models = []
+    for model in models:
+        metrics_dict = get_model_metrics_all(corpus, model, num_topics, [metric1, metric2])
+        if metrics_dict:
+            all_metrics.append((model, metrics_dict))
+    
+    for model, model_metrics in all_metrics:
+        if not is_dominated(model_metrics, [m[1] for m in all_metrics], [metric1, metric2]):
+            pareto_models.append(model)
+    
+    console.print(f"Pareto Models: [green]{', '.join(pareto_models)}[/green]")
+    
+    return corpus, num_topics, metric1, metric2
+
+
+def plot_pareto_front(corpus: str, num_topics: int, metric1: str, metric2: str):
+    """
+    Plot the Pareto front for a given (dataset, num_topics) pair and 2 metrics.
+    Creates a scatter plot showing all models and highlights the Pareto front with a dotted line.
+    """
+    import matplotlib.pyplot as plt
+    
+    # Get list of models
+    models = get_topic_model_list()
+    
+    # Get metrics for all models
+    all_metrics = []
+    model_names = []
+    for model in models:
+        metrics_dict = get_model_metrics_all(corpus, model, num_topics, [metric1, metric2])
+        if metrics_dict:
+            all_metrics.append(metrics_dict)
+            model_names.append(model)
+    
+    if not all_metrics:
+        print(f"No data found for corpus={corpus}, num_topics={num_topics}")
+        return
+    
+    # Separate Pareto and non-Pareto models
+    pareto_models = []
+    pareto_metrics = []
+    non_pareto_models = []
+    non_pareto_metrics = []
+    
+    for i, model_metrics in enumerate(all_metrics):
+        if not is_dominated(model_metrics, all_metrics, [metric1, metric2]):
+            pareto_models.append(model_names[i])
+            pareto_metrics.append(model_metrics)
+        else:
+            non_pareto_models.append(model_names[i])
+            non_pareto_metrics.append(model_metrics)
+    
+    # Create the plot
+    plt.figure(figsize=(8, 6))
+    
+    # Plot non-Pareto models in gray
+    if non_pareto_metrics:
+        non_pareto_x = [m[metric1] for m in non_pareto_metrics]
+        non_pareto_y = [m[metric2] for m in non_pareto_metrics]
+        plt.scatter(non_pareto_x, non_pareto_y, c='gray', alpha=0.6, s=100, label='Non-Pareto Models', marker='x')
+        
+        # Add model labels for non-Pareto models
+        for i, model in enumerate(non_pareto_models):
+            plt.annotate(model, (non_pareto_x[i], non_pareto_y[i]), 
+                        xytext=(-10, -10), textcoords='offset points', 
+                        fontsize=8, alpha=0.7)
+    
+    # Plot Pareto models in red and connect them with dotted line
+    if pareto_metrics:
+        pareto_x = [m[metric1] for m in pareto_metrics]
+        pareto_y = [m[metric2] for m in pareto_metrics]
+        
+        # Sort Pareto points for proper line connection
+        # For higher-is-better metrics, sort in descending order
+        # For lower-is-better metrics, sort in ascending order
+        if metric1 in ["NPMI", "WEPS", "WECS"]:
+            # Higher is better for metric1
+            pareto_points = sorted(zip(pareto_x, pareto_y, pareto_models), key=lambda x: x[0], reverse=True)
+        else:
+            # Lower is better for metric1 (ISH)
+            pareto_points = sorted(zip(pareto_x, pareto_y, pareto_models), key=lambda x: x[0])
+        
+        pareto_x_sorted = [p[0] for p in pareto_points]
+        pareto_y_sorted = [p[1] for p in pareto_points]
+        pareto_models_sorted = [p[2] for p in pareto_points]
+        
+        # Plot Pareto points
+        plt.scatter(pareto_x_sorted, pareto_y_sorted, c='black', s=150, label='Pareto Models', zorder=5, alpha=0.5, marker='o')
+        
+        # Connect Pareto points with dotted line
+        plt.plot(pareto_x_sorted, pareto_y_sorted, 'k--', linewidth=2, alpha=0.8, zorder=4)
+        
+        # Add model labels for Pareto models
+        for i, model in enumerate(pareto_models_sorted):
+            model = pretty_model_name(model)
+            plt.annotate(model, (pareto_x_sorted[i], pareto_y_sorted[i]), 
+                        xytext=(10, -5), textcoords='offset points', 
+                        fontsize=9, weight='bold', color='black')
+    
+    # Set labels and title
+    plt.xlabel(metric1, fontsize=12)
+    plt.ylabel(metric2, fontsize=12)
+    # plt.title(f'Pareto Front: {metric1} vs {metric2}\nCorpus: {corpus}, Topics: {num_topics}', 
+            #   fontsize=14)
+    
+    # Add grid
+    plt.grid(True, alpha=0.3)
+    
+    # Add legend
+    plt.legend(loc='best')
+    
+    # Adjust layout
+    plt.tight_layout()
+
+    # save plot
+    plt.savefig(f"ignore/results/pareto_front_{corpus}_{num_topics}_{metric1}_{metric2}.png", dpi=300)
+    
+    # Show the plot
+    plt.show()
 
 if __name__ == '__main__':
     # Example usage
@@ -453,3 +662,5 @@ if __name__ == '__main__':
     # pretty_print_top_models_table(joined=True, top_n=1)  # Single table with top 3 models
     # pretty_print_pareto_front_table()  # Show number of models on Pareto front
     pretty_print_model_points_table(output_latex=True)  # Show points by model and metric
+    # output = find_coolest_pareto_plot(max_points_on_front=6)  # Find best 2-metric Pareto plot configuration
+    # plot_pareto_front(*output)
