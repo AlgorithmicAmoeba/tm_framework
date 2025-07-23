@@ -64,6 +64,12 @@ def get_all_results_data() -> Dict[str, Any]:
             data[model][corpus] = {}
         if num_topics not in data[model][corpus]:
             data[model][corpus][num_topics] = {}
+        
+        # Convert ISH to NISH (Negative ISH) - negate values so higher is better
+        if metric == "ISH":
+            metric = "NISH"
+            values = [-v for v in values]
+        
         if metric not in data[model][corpus][num_topics]:
             data[model][corpus][num_topics][metric] = []
         
@@ -97,7 +103,7 @@ def create_performance_summary_table(data: Dict[str, Any], output_dir: Path) -> 
     """Create overall performance summary table with statistical significance"""
     print("Creating performance summary table...")
     
-    metrics = ["NPMI", "WEPS", "WECS", "ISH"]
+    metrics = ["NPMI", "WEPS", "WECS", "NISH"]
     models = list(data.keys())
     
     # Collect all metric values for ranking
@@ -132,14 +138,10 @@ def create_performance_summary_table(data: Dict[str, Any], output_dir: Path) -> 
                 means.append(np.nan)
                 stds.append(np.nan)
         
-        # Calculate rankings (higher is better for all metrics except ISH)
+        # Calculate rankings (higher is better for all metrics including NISH)
         valid_means = [(i, m) for i, m in enumerate(means) if not np.isnan(m)]
-        if metric == "ISH":
-            # Lower is better for ISH
-            sorted_indices = sorted(valid_means, key=lambda x: x[1])
-        else:
-            # Higher is better for other metrics
-            sorted_indices = sorted(valid_means, key=lambda x: x[1], reverse=True)
+        # Higher is better for all metrics
+        sorted_indices = sorted(valid_means, key=lambda x: x[1], reverse=True)
         
         # Assign ranks
         model_ranks = [np.nan] * len(models)
@@ -158,20 +160,12 @@ def create_performance_summary_table(data: Dict[str, Any], output_dir: Path) -> 
             # Helper function to test if model A is significantly better than model B
             def is_significantly_better(model_a_idx, model_b_idx):
                 try:
-                    if metric == "ISH":
-                        # Lower is better for ISH
-                        _, p_value = mannwhitneyu(
-                            all_values[metric][models[model_a_idx]],
-                            all_values[metric][models[model_b_idx]],
-                            alternative='less'
-                        )
-                    else:
-                        # Higher is better for other metrics
-                        _, p_value = mannwhitneyu(
-                            all_values[metric][models[model_a_idx]],
-                            all_values[metric][models[model_b_idx]],
-                            alternative='greater'
-                        )
+                    # Higher is better for all metrics including NISH
+                    _, p_value = mannwhitneyu(
+                        all_values[metric][models[model_a_idx]],
+                        all_values[metric][models[model_b_idx]],
+                        alternative='greater'
+                    )
                     return p_value < 0.05
                 except:
                     return False
@@ -294,10 +288,8 @@ def create_performance_summary_table(data: Dict[str, Any], output_dir: Path) -> 
         for metric in metrics:
             model_idx = models.index(model)
             valid_means = [(i, m) for i, m in enumerate([np.mean(all_values[metric][mod]) if all_values[metric][mod] else np.nan for mod in models]) if not np.isnan(m)]
-            if metric == "ISH":
-                sorted_indices = sorted(valid_means, key=lambda x: x[1])
-            else:
-                sorted_indices = sorted(valid_means, key=lambda x: x[1], reverse=True)
+            # Higher is better for all metrics including NISH
+            sorted_indices = sorted(valid_means, key=lambda x: x[1], reverse=True)
             
             for rank, (idx, _) in enumerate(sorted_indices, 1):
                 if idx == model_idx:
@@ -331,7 +323,7 @@ def create_algorithm_heatmaps(data: Dict[str, Any], output_dir: Path) -> None:
     """Create algorithm comparison heatmaps for each metric"""
     print("Creating algorithm heatmaps...")
     
-    metrics = ["NPMI", "WEPS", "WECS", "ISH"]
+    metrics = ["NPMI", "WEPS", "WECS", "NISH"]
     models = list(data.keys())
     
     # Set up matplotlib for publication quality
@@ -378,12 +370,8 @@ def create_algorithm_heatmaps(data: Dict[str, Any], output_dir: Path) -> None:
                             if values_a and values_b:
                                 # Statistical test
                                 try:
-                                    if metric == "ISH":
-                                        # Lower is better for ISH
-                                        _, p_value = mannwhitneyu(values_a, values_b, alternative='less')
-                                    else:
-                                        # Higher is better for other metrics
-                                        _, p_value = mannwhitneyu(values_a, values_b, alternative='greater')
+                                    # Higher is better for all metrics including NISH
+                                    _, p_value = mannwhitneyu(values_a, values_b, alternative='greater')
                                     
                                     if p_value < 0.05:
                                         wins += 1
@@ -436,8 +424,8 @@ def create_pareto_plots(data: Dict[str, Any], output_dir: Path) -> None:
     metric_pairs = [
         ("NPMI", "WEPS"),
         ("NPMI", "WECS"), 
-        ("WEPS", "ISH"),
-        ("WECS", "ISH")
+        ("WEPS", "NISH"),
+        ("WECS", "NISH")
     ]
     
     models = list(data.keys())
@@ -488,27 +476,10 @@ def create_pareto_plots(data: Dict[str, Any], output_dir: Path) -> None:
                 
                 other_perf1, other_perf2 = model_performance[other_model]
                 
-                # Check if dominated
-                if metric1 in ["NPMI", "WEPS", "WECS"] and metric2 in ["NPMI", "WEPS", "WECS"]:
-                    # Both higher is better
-                    if other_perf1 >= perf1 and other_perf2 >= perf2 and (other_perf1 > perf1 or other_perf2 > perf2):
-                        is_pareto = False
-                        break
-                elif metric1 in ["NPMI", "WEPS", "WECS"] and metric2 == "ISH":
-                    # Higher is better for metric1, lower is better for metric2
-                    if other_perf1 >= perf1 and other_perf2 <= perf2 and (other_perf1 > perf1 or other_perf2 < perf2):
-                        is_pareto = False
-                        break
-                elif metric1 == "ISH" and metric2 in ["NPMI", "WEPS", "WECS"]:
-                    # Lower is better for metric1, higher is better for metric2
-                    if other_perf1 <= perf1 and other_perf2 >= perf2 and (other_perf1 < perf1 or other_perf2 > perf2):
-                        is_pareto = False
-                        break
-                elif metric1 == "ISH" and metric2 == "ISH":
-                    # Both lower is better
-                    if other_perf1 <= perf1 and other_perf2 <= perf2 and (other_perf1 < perf1 or other_perf2 < perf2):
-                        is_pareto = False
-                        break
+                # Check if dominated (higher is better for all metrics)
+                if other_perf1 >= perf1 and other_perf2 >= perf2 and (other_perf1 > perf1 or other_perf2 > perf2):
+                    is_pareto = False
+                    break
             
             if is_pareto:
                 pareto_models.append(model)
@@ -519,7 +490,7 @@ def create_pareto_plots(data: Dict[str, Any], output_dir: Path) -> None:
         if non_pareto_models:
             x_vals = [model_performance[model][0] for model in non_pareto_models]
             y_vals = [model_performance[model][1] for model in non_pareto_models]
-            ax.scatter(x_vals, y_vals, c='lightgray', s=50, alpha=0.6, marker='x', label='Non-Pareto')
+            ax.scatter(x_vals, y_vals, c='black', s=50, alpha=0.7, marker='x', label='Non-Pareto')
         
         # Plot Pareto models
         if pareto_models:
@@ -528,12 +499,8 @@ def create_pareto_plots(data: Dict[str, Any], output_dir: Path) -> None:
             
             # Sort Pareto points for proper line connection
             pareto_points = list(zip(x_vals, y_vals, pareto_models))
-            if metric1 in ["NPMI", "WEPS", "WECS"]:
-                # Higher is better for metric1
-                pareto_points = sorted(pareto_points, key=lambda x: x[0], reverse=True)
-            else:
-                # Lower is better for metric1 (ISH)
-                pareto_points = sorted(pareto_points, key=lambda x: x[0])
+            # Higher is better for all metrics
+            pareto_points = sorted(pareto_points, key=lambda x: x[0], reverse=True)
             
             x_vals_sorted = [p[0] for p in pareto_points]
             y_vals_sorted = [p[1] for p in pareto_points]
@@ -568,7 +535,7 @@ def create_pareto_table(data: Dict[str, Any], output_dir: Path) -> None:
     """Create table showing count of non-Pareto optimal models"""
     print("Creating Pareto table...")
     
-    metrics = ["NPMI", "WEPS", "WECS", "ISH"]
+    metrics = ["NPMI", "WEPS", "WECS", "NISH"]
     models = list(data.keys())
     
     # Get all datasets and topic numbers
@@ -628,16 +595,10 @@ def create_pareto_table(data: Dict[str, Any], output_dir: Path) -> None:
                     # Check if current model is dominated by other model
                     dominates = True
                     for metric in metrics:
-                        if metric in ["NPMI", "WEPS", "WECS"]:
-                            # Higher is better
-                            if other_metrics[metric] <= model_metrics[metric]:
-                                dominates = False
-                                break
-                        elif metric == "ISH":
-                            # Lower is better
-                            if other_metrics[metric] >= model_metrics[metric]:
-                                dominates = False
-                                break
+                        # Higher is better for all metrics
+                        if other_metrics[metric] <= model_metrics[metric]:
+                            dominates = False
+                            break
                     
                     if dominates:
                         is_dominated = True
@@ -658,7 +619,7 @@ def create_pareto_table(data: Dict[str, Any], output_dir: Path) -> None:
     latex_table = df.to_latex(
         index=False,
         column_format='l' + 'c' * len(topic_numbers),
-        caption="Number of non-Pareto optimal models for each dataset-topic combination. Pareto optimality calculated using all four metrics (NPMI, WEPS, WECS, ISH).",
+        caption="Number of non-Pareto optimal models for each dataset-topic combination. Pareto optimality calculated using all four metrics (NPMI, WEPS, WECS, NISH).",
         label="tab:pareto_counts"
     )
     
@@ -687,10 +648,10 @@ def main():
     print(f"Loaded data for {len(data)} models")
     
     # Create all outputs
-    create_performance_summary_table(data, output_dir)
-    create_algorithm_heatmaps(data, output_dir)
+    # create_performance_summary_table(data, output_dir)
+    # create_algorithm_heatmaps(data, output_dir)
     create_pareto_plots(data, output_dir)
-    create_pareto_table(data, output_dir)
+    # create_pareto_table(data, output_dir)
     
     print(f"\nAll analysis complete! Results saved to {output_dir}")
     print("Generated files:")
