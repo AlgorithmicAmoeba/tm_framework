@@ -4,6 +4,8 @@ ignore/
 CLAUDE.md
 .github/
 
+todo*.md
+
 ## From github
 # Byte-compiled / optimized / DLL files
 __pycache__/

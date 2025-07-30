@@ -14,6 +14,79 @@ from database import get_session
 import configuration as cfg
 
 
+def _get_feature_code(feature_name: str) -> str:
+    """
+    Map feature names to unique 4-5 letter codes.
+    
+    Args:
+        feature_name: The full feature name
+        
+    Returns:
+        Unique code for the feature
+    """
+    feature_codes = {
+        # Words per document metrics
+        'words_per_document_average': 'wpdav',
+        'words_per_document_iqr_range': 'wpdiq',
+        'words_per_document_kurtosis': 'wpdku',
+        'words_per_document_median': 'wpdmd',
+        'words_per_document_std_dev': 'wpdsd',
+        'words_per_document_fano_factor': 'wpdff',
+        'words_per_document_kl_div_uniform': 'wpdkl',
+        
+        # Sentences per document metrics
+        'sentences_per_document_average': 'spdav',
+        'sentences_per_document_iqr_range': 'spdiq',
+        'sentences_per_document_kurtosis': 'spdku',
+        'sentences_per_document_median': 'spdmd',
+        'sentences_per_document_std_dev': 'spdsd',
+        'sentences_per_document_fano_factor': 'spdff',
+        'sentences_per_document_kl_div_uniform': 'spdkl',
+        
+        # Characters per word metrics
+        'characters_per_word_average': 'cpwav',
+        'characters_per_word_iqr_range': 'cpwiq',
+        'characters_per_word_kurtosis': 'cpwku',
+        'characters_per_word_median': 'cpwmd',
+        'characters_per_word_std_dev': 'cpwsd',
+        'characters_per_word_fano_factor': 'cpwff',
+        'characters_per_word_kl_div_uniform': 'cpwkl',
+        
+        # Words per sentence metrics
+        'words_per_sentence_average': 'wpsav',
+        'words_per_sentence_iqr_range': 'wpsiq',
+        'words_per_sentence_kurtosis': 'wpsku',
+        'words_per_sentence_median': 'wpsmd',
+        'words_per_sentence_std_dev': 'wpssd',
+        'words_per_sentence_fano_factor': 'wpsff',
+        'words_per_sentence_kl_div_uniform': 'wpskl',
+        
+        # Compression ratio metrics
+        'compression_ratio_average': 'cmpav',
+        'compression_ratio_iqr_range': 'cmpiq',
+        'compression_ratio_kurtosis': 'cmpku',
+        'compression_ratio_median': 'cmpmd',
+        'compression_ratio_std_dev': 'cmpsd',
+        'compression_ratio_fano_factor': 'cmpff',
+        'compression_ratio_kl_div_uniform': 'cmpkl',
+        
+        # Word entropy metrics
+        'word_entropy_average': 'wenav',
+        'word_entropy_iqr_range': 'weniq',
+        'word_entropy_kurtosis': 'wenku',
+        'word_entropy_median': 'wenmd',
+        'word_entropy_std_dev': 'wensd',
+        'word_entropy_fano_factor': 'wenff',
+        'word_entropy_kl_div_uniform': 'wenkl',
+        
+        # Dataset-level metrics
+        'num_documents': 'numdoc',
+        'document_compression_ratio': 'doccmp',
+    }
+    
+    return feature_codes.get(feature_name, feature_name[:5].lower())
+
+
 def extract_corpus_features(session: Session) -> pd.DataFrame:
     """
     Extract corpus features from the database.
@@ -44,8 +117,8 @@ def extract_corpus_features(session: Session) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=['corpus_name', 'feature_name', 'feature_value'])
     features_df = df.pivot(index='corpus_name', columns='feature_name', values='feature_value')
     
-    # Add 'feature_' prefix to column names to match expected format
-    features_df.columns = [f'feature_{col}' for col in features_df.columns]
+    # Add 'feature_' prefix with unique codes to column names to match expected format
+    features_df.columns = [f'feature_{_get_feature_code(col)}_{col}' for col in features_df.columns]
     
     logging.info(f"Extracted {len(features_df)} datasets with {len(features_df.columns)} features")
     
@@ -197,6 +270,13 @@ def generate_performance_features_tables(output_dir: Path = None):
         
         for metric_name, metric_df in metrics_dict.items():
             logging.info(f"Processing metric: {metric_name}")
+
+            # Find metric df minumum and add it to the metric df
+            min_value = metric_df.min().min()
+            metric_df = metric_df.add(-min_value)
+
+            # log the median of the metric df
+            logging.info(f"Median of {metric_name}: {metric_df.median().median()}")
             
             # Create combined table
             combined_df = create_performance_features_table(features_df, metric_df, metric_name)

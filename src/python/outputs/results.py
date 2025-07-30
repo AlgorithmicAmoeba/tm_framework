@@ -647,7 +647,6 @@ def main():
     
     print(f"Loaded data for {len(data)} models")
     
-    # Create all outputs
     # create_performance_summary_table(data, output_dir)
     # create_algorithm_heatmaps(data, output_dir)
     create_pareto_plots(data, output_dir)
