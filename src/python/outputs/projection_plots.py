@@ -375,7 +375,7 @@ def plot_projections_for_metric(metric_name: str, output_dir: Path):
     # Create bounded projection using CLOISTER
     print(f"Computing CLOISTER boundary for {metric_name}...")
     projected_coords_bounded, boundary_coords = compute_bounded_projection(
-        feature_values, projection_matrix, epsilon=0.5, p_value=0.05)
+        feature_values, projection_matrix, epsilon=0.7, p_value=0.05)
     
     # Create bounded projection plot
     title_bounded = f"Matilda Projection Plot - {metric_name.upper()} Metric"
