@@ -83,7 +83,7 @@ class BOEEmbeddingPipeline:
         self, 
         session: Session, 
         corpus_name: str, 
-        limit: int = None
+        limit: int,
     ) -> List[Dict[str, Any]]:
         """
         Fetch chunked documents from the database for a specified corpus.
@@ -148,7 +148,7 @@ class BOEEmbeddingPipeline:
         
         logging.info(f"Generating dense embeddings for {len(chunks)} chunks using {len(dense_models)} models")
         
-        results = {}
+        results: dict[str, Any] = {}
         
         # Process chunks in batches
         for i in range(0, len(chunks), batch_size):
@@ -178,12 +178,14 @@ class BOEEmbeddingPipeline:
                 try:
                     # Generate embeddings for the entire batch
                     batch_embeddings = model.model_instance.encode(batch_texts, convert_to_tensor=False)
+                    assert isinstance(batch_embeddings, np.ndarray), "batch_embeddings must be a numpy array"
                     
                     # Store embeddings for each chunk in the batch
                     for j, chunk_hash in enumerate(batch_chunk_hashes):
                         if chunk_hash not in results:
                             results[chunk_hash] = {}
                         
+                        assert hasattr(batch_embeddings[j], 'tolist'), "batch_embeddings[j] must have a tolist method"
                         results[chunk_hash][model_name] = {
                             'type': 'dense',
                             'vector': batch_embeddings[j].tolist()
@@ -220,7 +222,7 @@ class BOEEmbeddingPipeline:
         
         logging.info(f"Generating sparse embeddings for {len(chunks)} chunks using {len(sparse_models)} models")
         
-        results = {}
+        results: dict[str, Any] = {}
         
         # Process chunks in batches
         for i in range(0, len(chunks), batch_size):
@@ -253,6 +255,7 @@ class BOEEmbeddingPipeline:
                 try:
                     # Generate embeddings for the entire batch
                     batch_embeddings = model.model_instance.encode(batch_texts)
+                    assert isinstance(batch_embeddings, np.ndarray), "batch_embeddings must be a numpy array"
                     
                     # Store embeddings for each chunk in the batch
                     for j, chunk_hash in enumerate(batch_chunk_hashes):
@@ -411,7 +414,7 @@ class BOEEmbeddingPipeline:
         session: Session, 
         corpus_name: str, 
         batch_size: int,
-        limit: int = None,
+        limit: int,
     ) -> Dict[str, Any]:
         """
         Process embeddings for all chunks in a corpus.
