@@ -1,0 +1,21 @@
+\begin{table}
+\caption{Overall Performance Ranks. \textbf{Bold} indicates statistically significant best performer, \underline{Underlined} indicates statistically significant second-best performer (Mann-Whitney U test, p < 0.05). Lower rank is better.}
+\label{tab:rank_summary}
+\begin{tabular}{lcccc}
+\toprule
+ & NPMI & WEPS & WECS & NISH \\
+\midrule
+KeyNMF & 3 & \underline{2} & 6 & 8 \\
+NMF & \textbf{1} & 7 & 10 & \underline{3} \\
+CombinedTM & 7 & 5 & \underline{3} & 7 \\
+CombinedTM-sbert & 6 & 6 & 4 & 6 \\
+ZeroShotTM-sbert & 8 & 4 & \underline{2} & 9 \\
+BERTopic & 4 & 8 & 7 & \underline{5} \\
+GMM & \underline{2} & 10 & 11 & \textbf{1} \\
+ZeroShotTM & 9 & 3 & \textbf{1} & 11 \\
+BERTopic-sbert & 5 & 9 & 8 & \underline{4} \\
+$\text{S}^3$ & 11 & \textbf{1} & 5 & 10 \\
+LDA & 10 & 11 & 9 & \underline{2} \\
+\bottomrule
+\end{tabular}
+\end{table}

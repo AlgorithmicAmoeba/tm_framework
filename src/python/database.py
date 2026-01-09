@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
@@ -27,8 +28,14 @@ def _get_session_maker(db_config: cfg.DatabaseConfig):
     return __Session_maker
 
 
+@contextmanager
 def get_session(db_config: cfg.DatabaseConfig):
-    return _get_session_maker(db_config)()
+    """Context manager for database sessions that automatically handles cleanup."""
+    session = _get_session_maker(db_config)()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def get_test_session(db_config: cfg.DatabaseConfig):

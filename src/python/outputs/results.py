@@ -319,28 +319,132 @@ def create_performance_summary_table(data: Dict[str, Any], output_dir: Path) -> 
     print(f"Performance summary table saved to {output_dir / 'performance_summary.tex'}")
 
 
+def _create_single_heatmap(data: Dict[str, Any], models: List[str], metric: str, ax=None, vmin=None, vmax=None, show_colorbar=True, show_xlabels=True, show_ylabels=True, show_xlabel=True, show_ylabel=True) -> Tuple[np.ndarray, Any]:
+    """Helper function to create a single heatmap for a metric"""
+    # Create win matrix
+    win_matrix = np.zeros((len(models), len(models)))
+    
+    # Compare each pair of models
+    for i, model_a in enumerate(models):
+        for j, model_b in enumerate(models):
+            if i == j:
+                continue
+            
+            wins = 0
+            total_comparisons = 0
+            
+            # Compare across all datasets and topic numbers
+            for corpus in data[model_a]:
+                if corpus not in data[model_b]:
+                    continue
+                
+                for num_topics in data[model_a][corpus]:
+                    if num_topics not in data[model_b][corpus]:
+                        continue
+                    
+                    if (metric in data[model_a][corpus][num_topics] and 
+                        metric in data[model_b][corpus][num_topics]):
+                        
+                        values_a = data[model_a][corpus][num_topics][metric]
+                        values_b = data[model_b][corpus][num_topics][metric]
+                        
+                        if values_a and values_b:
+                            # Statistical test
+                            try:
+                                # Higher is better for all metrics including NISH
+                                _, p_value = mannwhitneyu(values_a, values_b, alternative='greater')
+                                
+                                if p_value < 0.05:
+                                    wins += 1
+                                total_comparisons += 1
+                            except:
+                                continue
+            
+            win_matrix[i, j] = wins
+    
+    # Create figure if ax not provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        is_new_figure = True
+    else:
+        fig = None
+        is_new_figure = False
+    
+    # Create heatmap with shared vmin/vmax if provided
+    im = ax.imshow(win_matrix, cmap='gray', aspect='auto', vmin=vmin, vmax=vmax)
+    
+    # Set ticks and labels
+    pretty_names = [get_pretty_model_name(model) for model in models]
+    ax.set_xticks(range(len(models)))
+    ax.set_yticks(range(len(models)))
+    
+    if show_xlabels:
+        ax.set_xticklabels(pretty_names, rotation=45, ha='right', fontsize=8)
+    else:
+        ax.set_xticklabels([])
+    
+    if show_ylabels:
+        ax.set_yticklabels(pretty_names, fontsize=8)
+    else:
+        ax.set_yticklabels([])
+    
+    # Add text annotations
+    for i in range(len(models)):
+        for j in range(len(models)):
+            if i != j:
+                # Use white text for dark colors (high values) and black text for light colors (low values)
+                # Use global max if vmax is provided, otherwise use local max
+                max_val = vmax if vmax is not None else np.max(win_matrix)
+                text_color = "white" if win_matrix[i, j] < max_val/2 else "black"
+                ax.text(j, i, f'{int(win_matrix[i, j])}',
+                       ha="center", va="center", color=text_color,
+                       fontsize=7)
+    
+    ax.set_title(f'{metric}', fontsize=11, fontweight='bold')
+    
+    if show_xlabel:
+        ax.set_xlabel('Algorithm B', fontsize=9)
+    else:
+        ax.set_xlabel('')
+    
+    if show_ylabel:
+        ax.set_ylabel('Algorithm A', fontsize=9)
+    else:
+        ax.set_ylabel('')
+    
+    # Add colorbar only if requested
+    if show_colorbar:
+        cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+        cbar.set_label('Wins', fontsize=8)
+        cbar.ax.tick_params(labelsize=7)
+    
+    if is_new_figure:
+        plt.tight_layout()
+        return win_matrix, fig
+    else:
+        return win_matrix, im
+
+
 def create_algorithm_heatmaps(data: Dict[str, Any], output_dir: Path) -> None:
     """Create algorithm comparison heatmaps for each metric"""
     print("Creating algorithm heatmaps...")
     
     metrics = ["NPMI", "WEPS", "WECS", "NISH"]
     models = list(data.keys())
+
+    models = ["LDA", "NMF", "ZeroShotTM", "ZeroShotTM_sbert", "CombinedTM", "CombinedTM_sbert", "BERTopic", "BERTopic_sbert", "GMM", "KeyNMF", "SemanticSignalSeparation"]
     
     # Set up matplotlib for publication quality
     plt.rcParams.update({
-        'font.size': 10,
+        'font.size': 13,
         'font.family': 'serif',
         'axes.linewidth': 0.5,
         'figure.dpi': 600
     })
     
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    axes = axes.flatten()
-    
-    for metric_idx, metric in enumerate(metrics):
-        ax = axes[metric_idx]
-        
-        # Create win matrix
+    # First, compute all win matrices to find global min and max for shared color scale
+    all_win_matrices = []
+    for metric in metrics:
         win_matrix = np.zeros((len(models), len(models)))
         
         # Compare each pair of models
@@ -350,7 +454,6 @@ def create_algorithm_heatmaps(data: Dict[str, Any], output_dir: Path) -> None:
                     continue
                 
                 wins = 0
-                total_comparisons = 0
                 
                 # Compare across all datasets and topic numbers
                 for corpus in data[model_a]:
@@ -375,46 +478,179 @@ def create_algorithm_heatmaps(data: Dict[str, Any], output_dir: Path) -> None:
                                     
                                     if p_value < 0.05:
                                         wins += 1
-                                    total_comparisons += 1
                                 except:
                                     continue
-                
+        
                 win_matrix[i, j] = wins
         
-        # Create heatmap
-        im = ax.imshow(win_matrix, cmap='gray', aspect='auto')
-        
-        # Set ticks and labels
-        pretty_names = [get_pretty_model_name(model) for model in models]
-        ax.set_xticks(range(len(models)))
-        ax.set_yticks(range(len(models)))
-        ax.set_xticklabels(pretty_names, rotation=45, ha='right', fontsize=8)
-        ax.set_yticklabels(pretty_names, fontsize=8)
-        
-        # Add text annotations
-        for i in range(len(models)):
-            for j in range(len(models)):
-                if i != j:
-                    # Use white text for dark colors (high values) and black text for light colors (low values)
-                    text_color = "white" if win_matrix[i, j] < np.max(win_matrix)/2 else "black"
-                    text = ax.text(j, i, f'{int(win_matrix[i, j])}',
-                                 ha="center", va="center", color=text_color,
-                                 fontsize=7)
-        
-        ax.set_title(f'{metric}', fontsize=11, fontweight='bold')
-        ax.set_xlabel('Algorithm B', fontsize=9)
-        ax.set_ylabel('Algorithm A', fontsize=9)
-        
-        # Add colorbar
-        cbar = plt.colorbar(im, ax=ax, shrink=0.8)
-        cbar.set_label('Wins', fontsize=8)
-        cbar.ax.tick_params(labelsize=7)
+        all_win_matrices.append(win_matrix)
     
-    plt.tight_layout()
+    # Find global min and max across all matrices
+    global_min = min(np.min(matrix) for matrix in all_win_matrices)
+    global_max = max(np.max(matrix) for matrix in all_win_matrices)
+    
+    # Create combined figure with subplots
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig.patch.set_facecolor('#e9ebe8')
+    axes = axes.flatten()
+    
+    for metric_idx, metric in enumerate(metrics):
+        ax = axes[metric_idx]
+        ax.set_facecolor('#e9ebe8')
+        
+        # Determine which labels to show based on position
+        # Index 0: top-left (y-labels only)
+        # Index 1: top-right (no labels)
+        # Index 2: bottom-left (both x and y labels)
+        # Index 3: bottom-right (x-labels only)
+        show_xlabels = metric_idx in [2, 3]  # Bottom row
+        show_ylabels = metric_idx in [0, 2]  # Left column
+        show_xlabel = metric_idx in [2, 3]  # Bottom row
+        show_ylabel = metric_idx in [0, 2]  # Left column
+        
+        _create_single_heatmap(
+            data, models, metric, ax=ax, 
+            vmin=global_min, vmax=global_max,
+            show_colorbar=False,  # No individual colorbars
+            show_xlabels=show_xlabels,
+            show_ylabels=show_ylabels,
+            show_xlabel=show_xlabel,
+            show_ylabel=show_ylabel
+        )
+    
+    # Explicitly remove any colorbars that might have been created
+    # First, remove colorbars from image objects
+    for ax in axes:
+        for im in ax.images:
+            if hasattr(im, 'colorbar') and im.colorbar is not None:
+                try:
+                    im.colorbar.remove()
+                except (AttributeError, ValueError):
+                    pass
+    
+    # Remove any colorbar axes from the figure (colorbars are separate axes)
+    all_fig_axes = list(fig.get_axes())
+    for ax_fig in all_fig_axes:
+        # If it's not one of our main plot axes, it might be a colorbar
+        if ax_fig not in axes:
+            try:
+                ax_fig.remove()
+            except (AttributeError, ValueError):
+                pass
+    
+    # Reduce spacing between subplots
+    plt.subplots_adjust(left=0.08, right=0.95, top=0.95, bottom=0.08, wspace=0.05, hspace=0.05)
+    
     plt.savefig(output_dir / "algorithm_heatmaps.png", dpi=600, bbox_inches='tight')
     plt.close()
     
     print(f"Algorithm heatmaps saved to {output_dir / 'algorithm_heatmaps.png'}")
+    
+    # Create individual figures for each metric
+    for metric in metrics:
+        _, fig = _create_single_heatmap(data, models, metric)
+        filename = f"algorithm_heatmap_{metric.lower()}.png"
+        fig.savefig(output_dir / filename, dpi=600, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Individual heatmap saved to {output_dir / filename}")
+
+
+def _create_single_pareto_plot(data: Dict[str, Any], models: List[str], metric1: str, metric2: str, ax=None) -> Any:
+    """Helper function to create a single Pareto plot for a metric pair"""
+    # Calculate average performance for each model
+    model_performance = {}
+    for model in models:
+        values1 = []
+        values2 = []
+        
+        for corpus in data[model]:
+            for num_topics in data[model][corpus]:
+                if (metric1 in data[model][corpus][num_topics] and 
+                    metric2 in data[model][corpus][num_topics]):
+                    values1.extend(data[model][corpus][num_topics][metric1])
+                    values2.extend(data[model][corpus][num_topics][metric2])
+        
+        if values1 and values2:
+            model_performance[model] = (np.mean(values1), np.mean(values2))
+    
+    if not model_performance:
+        return None
+    
+    # Create figure if ax not provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        is_new_figure = True
+    else:
+        fig = None
+        is_new_figure = False
+    
+    # Determine Pareto optimal points
+    pareto_models = []
+    non_pareto_models = []
+    
+    for model in model_performance:
+        is_pareto = True
+        perf1, perf2 = model_performance[model]
+        
+        for other_model in model_performance:
+            if other_model == model:
+                continue
+            
+            other_perf1, other_perf2 = model_performance[other_model]
+            
+            # Check if dominated (higher is better for all metrics)
+            if other_perf1 >= perf1 and other_perf2 >= perf2 and (other_perf1 > perf1 or other_perf2 > perf2):
+                is_pareto = False
+                break
+        
+        if is_pareto:
+            pareto_models.append(model)
+        else:
+            non_pareto_models.append(model)
+    
+    # Plot non-Pareto models
+    if non_pareto_models:
+        x_vals = [model_performance[model][0] for model in non_pareto_models]
+        y_vals = [model_performance[model][1] for model in non_pareto_models]
+        ax.scatter(x_vals, y_vals, c='black', s=50, alpha=0.7, marker='x', label='Non-Pareto')
+    
+    # Plot Pareto models
+    if pareto_models:
+        x_vals = [model_performance[model][0] for model in pareto_models]
+        y_vals = [model_performance[model][1] for model in pareto_models]
+        
+        # Sort Pareto points for proper line connection
+        pareto_points = list(zip(x_vals, y_vals, pareto_models))
+        # Higher is better for all metrics
+        pareto_points = sorted(pareto_points, key=lambda x: x[0], reverse=True)
+        
+        x_vals_sorted = [p[0] for p in pareto_points]
+        y_vals_sorted = [p[1] for p in pareto_points]
+        pareto_models_sorted = [p[2] for p in pareto_points]
+        
+        ax.scatter(x_vals_sorted, y_vals_sorted, c='black', s=80, alpha=0.8, marker='o', label='Pareto Optimal')
+        
+        # Connect Pareto points with dotted line
+        ax.plot(x_vals_sorted, y_vals_sorted, 'k--', linewidth=2, alpha=0.8, zorder=4)
+        
+        # Add labels for Pareto optimal points
+        for i, model in enumerate(pareto_models_sorted):
+            x, y = x_vals_sorted[i], y_vals_sorted[i]
+            ax.annotate(get_pretty_model_name(model), (x, y), 
+                       xytext=(5, 5), textcoords='offset points',
+                       fontsize=8, fontweight='bold')
+    
+    ax.set_xlabel(metric1, fontsize=11)
+    ax.set_ylabel(metric2, fontsize=11)
+    ax.set_title(f'{metric1} vs {metric2}', fontsize=12, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=9)
+    
+    if is_new_figure:
+        plt.tight_layout()
+        return fig
+    else:
+        return None
 
 
 def create_pareto_plots(data: Dict[str, Any], output_dir: Path) -> None:
@@ -437,98 +673,28 @@ def create_pareto_plots(data: Dict[str, Any], output_dir: Path) -> None:
         'figure.dpi': 600
     })
     
+    # Create combined figure with subplots
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     axes = axes.flatten()
     
     for plot_idx, (metric1, metric2) in enumerate(metric_pairs):
         ax = axes[plot_idx]
-        
-        # Calculate average performance for each model
-        model_performance = {}
-        for model in models:
-            values1 = []
-            values2 = []
-            
-            for corpus in data[model]:
-                for num_topics in data[model][corpus]:
-                    if (metric1 in data[model][corpus][num_topics] and 
-                        metric2 in data[model][corpus][num_topics]):
-                        values1.extend(data[model][corpus][num_topics][metric1])
-                        values2.extend(data[model][corpus][num_topics][metric2])
-            
-            if values1 and values2:
-                model_performance[model] = (np.mean(values1), np.mean(values2))
-        
-        if not model_performance:
-            continue
-        
-        # Determine Pareto optimal points
-        pareto_models = []
-        non_pareto_models = []
-        
-        for model in model_performance:
-            is_pareto = True
-            perf1, perf2 = model_performance[model]
-            
-            for other_model in model_performance:
-                if other_model == model:
-                    continue
-                
-                other_perf1, other_perf2 = model_performance[other_model]
-                
-                # Check if dominated (higher is better for all metrics)
-                if other_perf1 >= perf1 and other_perf2 >= perf2 and (other_perf1 > perf1 or other_perf2 > perf2):
-                    is_pareto = False
-                    break
-            
-            if is_pareto:
-                pareto_models.append(model)
-            else:
-                non_pareto_models.append(model)
-        
-        # Plot non-Pareto models
-        if non_pareto_models:
-            x_vals = [model_performance[model][0] for model in non_pareto_models]
-            y_vals = [model_performance[model][1] for model in non_pareto_models]
-            ax.scatter(x_vals, y_vals, c='black', s=50, alpha=0.7, marker='x', label='Non-Pareto')
-        
-        # Plot Pareto models
-        if pareto_models:
-            x_vals = [model_performance[model][0] for model in pareto_models]
-            y_vals = [model_performance[model][1] for model in pareto_models]
-            
-            # Sort Pareto points for proper line connection
-            pareto_points = list(zip(x_vals, y_vals, pareto_models))
-            # Higher is better for all metrics
-            pareto_points = sorted(pareto_points, key=lambda x: x[0], reverse=True)
-            
-            x_vals_sorted = [p[0] for p in pareto_points]
-            y_vals_sorted = [p[1] for p in pareto_points]
-            pareto_models_sorted = [p[2] for p in pareto_points]
-            
-            ax.scatter(x_vals_sorted, y_vals_sorted, c='black', s=80, alpha=0.8, marker='o', label='Pareto Optimal')
-            
-            # Connect Pareto points with dotted line
-            ax.plot(x_vals_sorted, y_vals_sorted, 'k--', linewidth=2, alpha=0.8, zorder=4)
-            
-            # Add labels for Pareto optimal points
-            for i, model in enumerate(pareto_models_sorted):
-                x, y = x_vals_sorted[i], y_vals_sorted[i]
-                ax.annotate(get_pretty_model_name(model), (x, y), 
-                           xytext=(5, 5), textcoords='offset points',
-                           fontsize=8, fontweight='bold')
-        
-        ax.set_xlabel(metric1, fontsize=11)
-        ax.set_ylabel(metric2, fontsize=11)
-        ax.set_title(f'{metric1} vs {metric2}', fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=9)
+        _create_single_pareto_plot(data, models, metric1, metric2, ax=ax)
     
     plt.tight_layout()
     plt.savefig(output_dir / "pareto_plots.png", dpi=600, bbox_inches='tight')
     plt.close()
     
     print(f"Pareto plots saved to {output_dir / 'pareto_plots.png'}")
+    
+    # Create individual figures for each metric pair
+    for metric1, metric2 in metric_pairs:
+        fig = _create_single_pareto_plot(data, models, metric1, metric2)
+        if fig is not None:
+            filename = f"pareto_plot_{metric1.lower()}_vs_{metric2.lower()}.png"
+            fig.savefig(output_dir / filename, dpi=600, bbox_inches='tight')
+            plt.close(fig)
+            print(f"Individual Pareto plot saved to {output_dir / filename}")
 
 
 def create_pareto_table(data: Dict[str, Any], output_dir: Path) -> None:
@@ -648,8 +814,8 @@ def main():
     print(f"Loaded data for {len(data)} models")
     
     # create_performance_summary_table(data, output_dir)
-    # create_algorithm_heatmaps(data, output_dir)
-    create_pareto_plots(data, output_dir)
+    create_algorithm_heatmaps(data, output_dir)
+    # create_pareto_plots(data, output_dir)
     # create_pareto_table(data, output_dir)
     
     print(f"\nAll analysis complete! Results saved to {output_dir}")
