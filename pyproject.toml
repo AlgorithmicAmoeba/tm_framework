@@ -28,6 +28,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=1.19.1",
     "pytest",
     "snakeviz",
 ]
@@ -39,6 +40,9 @@ package = false
 name = "pypi"
 url = "https://pypi.org/simple"
 
+
+[tool.mypy]
+mypy_path = "src/python"
 
 [tool.dagster]
 module_name = "dagster_pipelines.definitions"

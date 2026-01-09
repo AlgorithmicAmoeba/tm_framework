@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 
 from database import get_session
 import configuration as cfg
-from shared_code import color_logging_text
 
 
 @dataclass
@@ -542,8 +541,8 @@ def main():
         chunk_limit = None  # Set to a number to limit chunks processed, None for all
         batch_size = 4096
         
-        print(f"BOE Embedding Pipeline Configuration:")
-        print(f"  Models:")
+        print("BOE Embedding Pipeline Configuration:")
+        print("  Models:")
         for config in model_configs:
             print(f"    - {config['name']} ({config['type']})")
         print(f"  Corpus: {corpus_name}")
