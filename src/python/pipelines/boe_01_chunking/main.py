@@ -332,6 +332,17 @@ def process_corpus_chunking(session: Session, corpus_name: str, chunk_size: int 
     return total_chunks, processed_docs
 
 
+def get_available_corpora(session: Session) -> list[str]:
+    """
+    Get list of available corpora from the database.
+    """
+    query = text("""
+        SELECT DISTINCT corpus_name FROM pipeline.boe_chunked_document
+    """)
+    result = session.execute(query)
+    return [row[0] for row in result]
+
+
 if __name__ == '__main__':
     # Configure logging
     logging.basicConfig(
@@ -357,18 +368,7 @@ if __name__ == '__main__':
         logging.info(f"Overlap: {overlap} characters")
         
         # List of corpora to process
-        corpora = [
-            "newsgroups",
-            "wikipedia_sample", 
-            "imdb_reviews",
-            "trec_questions",
-            "twitter-financial-news",
-            # "pubmed-multilabel",
-            # "patent-classification", 
-            # "goodreads-bookgenres",
-            # "battery-abstracts",
-            # "t2-ragbench-convfinqa"
-        ]
+        corpora = get_available_corpora(session)
         
         # Process each corpus
         for corpus_name in corpora:

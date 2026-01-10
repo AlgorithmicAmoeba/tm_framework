@@ -280,7 +280,7 @@ class BOEEmbeddingPipeline:
                                 'indices': indices,
                                 'values': values
                             }
-                            assert len(sparse_dict['indices']) == len(sparse_dict['values']), "indices and values must have the same length"
+                            
 
                         
                         results[chunk_hash][model_name] = {
@@ -499,25 +499,19 @@ class BOEEmbeddingPipeline:
         return stats
 
 
-def get_available_corpora() -> List[str]:
+def get_available_corpora(session: Session) -> List[str]:
     """
     Get list of available corpora from the chunking pipeline.
     
     Returns:
         List of corpus names
     """
-    return [
-        # "newsgroups",
-        # "wikipedia_sample", 
-        "imdb_reviews",
-        "trec_questions",
-        "twitter-financial-news",
-        # "pubmed-multilabel",
-        # "patent-classification",
-        # "goodreads-bookgenres",
-        # "battery-abstracts",
-        # "t2-ragbench-convfinqa"
-    ]
+    query = text("""
+        SELECT DISTINCT corpus_name FROM pipeline.boe_chunked_document
+    """)
+    result = session.execute(query)
+    return [row[0] for row in result]
+
 
 
 def main():
