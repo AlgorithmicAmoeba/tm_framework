@@ -266,18 +266,22 @@ class BOEEmbeddingPipeline:
                         sparse_embedding = batch_embeddings[j].coalesce()
                         if hasattr(sparse_embedding, 'indices') and hasattr(sparse_embedding, 'values'):
                             sparse_dict = {
-                                'indices': sparse_embedding.indices().tolist(),
+                                'indices': sparse_embedding.indices().tolist()[0],
                                 'values': sparse_embedding.values().tolist()
                             }
+
+                            assert len(sparse_dict['indices']) == len(sparse_dict['values']), "indices and values must have the same length"
                         else:
                             # Fallback: convert to dense and then to sparse representation
                             dense_embedding = sparse_embedding.toarray()[0]
-                            indices = np.where(dense_embedding != 0)[0].tolist()
+                            indices = np.where(dense_embedding != 0)[0].tolist()[0]
                             values = dense_embedding[indices].tolist()
                             sparse_dict = {
                                 'indices': indices,
                                 'values': values
                             }
+                            assert len(sparse_dict['indices']) == len(sparse_dict['values']), "indices and values must have the same length"
+
                         
                         results[chunk_hash][model_name] = {
                             'type': 'sparse',
