@@ -123,6 +123,59 @@ class BOEEmbeddingPipeline:
         logging.info(f"Fetched {len(chunks)} chunked documents from corpus: {corpus_name}")
         return chunks
     
+    def fetch_unembedded_chunks_for_model(
+        self,
+        session: Session,
+        corpus_name: str,
+        model_name: str,
+        model_type: str,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch chunks that don't have embeddings for a specific model.
+        
+        Args:
+            session: Database session
+            corpus_name: Name of the corpus to fetch chunks from
+            model_name: Name of the embedding model
+            model_type: Type of model ('dense' or 'sparse')
+            limit: Maximum number of chunks to fetch (None for all)
+            
+        Returns:
+            List of chunk dictionaries that need embedding for this model
+        """
+        # Choose the appropriate embedding table based on model type
+        embedding_table = "pipeline.boe_embedding" if model_type == "dense" else "pipeline.boe_embedding_sparse"
+        
+        query = f"""
+            SELECT 
+                bcd.chunk_hash,
+                bcd.content,
+                bcd.raw_document_hash
+            FROM pipeline.boe_chunked_document bcd
+            WHERE bcd.corpus_name = :corpus_name
+            AND NOT EXISTS (
+                SELECT 1 FROM {embedding_table} be
+                WHERE be.boe_chunked_document_hash = bcd.chunk_hash
+                AND be.model_name = :model_name
+            )
+        """
+        
+        if limit:
+            query += f" LIMIT {limit}"
+        
+        result = session.execute(text(query), {"corpus_name": corpus_name, "model_name": model_name})
+        
+        chunks = []
+        for row in result:
+            chunks.append({
+                'chunk_hash': row[0],
+                'content': row[1],
+                'raw_document_hash': row[2]
+            })
+        
+        return chunks
+    
     
     def generate_dense_embeddings_batch(
         self, 
@@ -255,7 +308,6 @@ class BOEEmbeddingPipeline:
                 try:
                     # Generate embeddings for the entire batch
                     batch_embeddings = model.model_instance.encode(batch_texts)
-                    assert isinstance(batch_embeddings, np.ndarray), "batch_embeddings must be a numpy array"
                     
                     # Store embeddings for each chunk in the batch
                     for j, chunk_hash in enumerate(batch_chunk_hashes):
@@ -422,7 +474,7 @@ class BOEEmbeddingPipeline:
     ) -> Dict[str, Any]:
         """
         Process embeddings for all chunks in a corpus.
-        First processes all dense embeddings, then all sparse embeddings.
+        Processes each model separately, skipping models where all chunks are already embedded.
         
         Args:
             session: Database session
@@ -435,68 +487,201 @@ class BOEEmbeddingPipeline:
         """
         logging.info(f"Starting embedding generation for corpus: {corpus_name}")
         
-        # Fetch chunked documents
-        chunks = self.fetch_chunked_documents(session, corpus_name, limit)
-        
-        if not chunks:
-            logging.warning(f"No chunked documents found for corpus: {corpus_name}")
-            return {"total_chunks": 0, "embeddings_generated": 0}
-        
-        # Step 1: Generate and store dense embeddings
-        logging.info("="*60)
-        logging.info("STEP 1: Processing dense embeddings")
-        logging.info("="*60)
-        
-        dense_embeddings_data = self.generate_dense_embeddings_batch(chunks, batch_size)
-        dense_inserted, dense_existing = 0, 0
-        
-        if dense_embeddings_data:
-            dense_inserted, dense_existing = self.store_dense_embeddings(session, dense_embeddings_data)
-            logging.info(f"Dense embeddings complete: {dense_inserted} inserted, {dense_existing} existing")
-        else:
-            logging.info("No dense embeddings generated")
-        
-        # Step 2: Generate and store sparse embeddings
-        logging.info("="*60)
-        logging.info("STEP 2: Processing sparse embeddings")
-        logging.info("="*60)
-        
-        sparse_embeddings_data = self.generate_sparse_embeddings_batch(chunks, batch_size)
-        sparse_inserted, sparse_existing = 0, 0
-        
-        if sparse_embeddings_data:
-            sparse_inserted, sparse_existing = self.store_sparse_embeddings(session, sparse_embeddings_data)
-            logging.info(f"Sparse embeddings complete: {sparse_inserted} inserted, {sparse_existing} existing")
-        else:
-            logging.info("No sparse embeddings generated")
-        
-        # Calculate total statistics
-        total_inserted = dense_inserted + sparse_inserted
-        total_existing = dense_existing + sparse_existing
-        chunks_with_embeddings = len(set(list(dense_embeddings_data.keys()) + list(sparse_embeddings_data.keys())))
-        
+        # Track statistics per model
         stats = {
-            "total_chunks": len(chunks),
-            "chunks_with_embeddings": chunks_with_embeddings,
-            "dense_embeddings_inserted": dense_inserted,
-            "dense_embeddings_existing": dense_existing,
-            "sparse_embeddings_inserted": sparse_inserted,
-            "sparse_embeddings_existing": sparse_existing,
-            "total_embeddings_inserted": total_inserted,
-            "total_embeddings_existing": total_existing
+            "corpus_name": corpus_name,
+            "models_processed": [],
+            "models_skipped": [],
+            "dense_embeddings_inserted": 0,
+            "sparse_embeddings_inserted": 0,
+            "total_embeddings_inserted": 0,
         }
+        
+        # Process each model separately
+        for model_name, model in self.models.items():
+            logging.info("="*60)
+            logging.info(f"Processing model: {model_name} ({model.model_type})")
+            logging.info("="*60)
+            
+            # Fetch only chunks that need embedding for this model
+            unembedded_chunks = self.fetch_unembedded_chunks_for_model(
+                session, corpus_name, model_name, model.model_type, limit
+            )
+            
+            if not unembedded_chunks:
+                logging.info(f"Model '{model_name}' already has embeddings for all chunks, skipping")
+                stats["models_skipped"].append(model_name)
+                continue
+            
+            logging.info(f"Found {len(unembedded_chunks)} chunks needing embeddings for model '{model_name}'")
+            stats["models_processed"].append(model_name)
+            
+            if model.model_type == 'dense':
+                # Generate dense embeddings for unembedded chunks
+                embeddings_data = self._generate_dense_embeddings_for_model(
+                    unembedded_chunks, model_name, model, batch_size
+                )
+                if embeddings_data:
+                    inserted, _ = self.store_dense_embeddings(session, embeddings_data)
+                    stats["dense_embeddings_inserted"] += inserted
+                    stats["total_embeddings_inserted"] += inserted
+                    logging.info(f"Dense embeddings for '{model_name}': {inserted} inserted")
+            
+            elif model.model_type == 'sparse':
+                # Generate sparse embeddings for unembedded chunks
+                embeddings_data = self._generate_sparse_embeddings_for_model(
+                    unembedded_chunks, model_name, model, batch_size
+                )
+                if embeddings_data:
+                    inserted, _ = self.store_sparse_embeddings(session, embeddings_data)
+                    stats["sparse_embeddings_inserted"] += inserted
+                    stats["total_embeddings_inserted"] += inserted
+                    logging.info(f"Sparse embeddings for '{model_name}': {inserted} inserted")
         
         logging.info("="*60)
         logging.info("EMBEDDING GENERATION COMPLETE")
         logging.info("="*60)
         logging.info(f"Corpus: {corpus_name}")
-        logging.info(f"Total chunks: {stats['total_chunks']}")
-        logging.info(f"Chunks with embeddings: {stats['chunks_with_embeddings']}")
-        logging.info(f"Dense embeddings: {dense_inserted} inserted, {dense_existing} existing")
-        logging.info(f"Sparse embeddings: {sparse_inserted} inserted, {sparse_existing} existing")
-        logging.info(f"Total embeddings: {total_inserted} inserted, {total_existing} existing")
+        logging.info(f"Models processed: {stats['models_processed']}")
+        logging.info(f"Models skipped (already complete): {stats['models_skipped']}")
+        logging.info(f"Dense embeddings inserted: {stats['dense_embeddings_inserted']}")
+        logging.info(f"Sparse embeddings inserted: {stats['sparse_embeddings_inserted']}")
+        logging.info(f"Total embeddings inserted: {stats['total_embeddings_inserted']}")
         
         return stats
+    
+    def _generate_dense_embeddings_for_model(
+        self,
+        chunks: List[Dict[str, Any]],
+        model_name: str,
+        model: EmbeddingModel,
+        batch_size: int
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Generate dense embeddings for a specific model.
+        
+        Args:
+            chunks: List of chunk dictionaries
+            model_name: Name of the model
+            model: EmbeddingModel instance
+            batch_size: Batch size for processing
+            
+        Returns:
+            Dictionary mapping chunk_hash to embedding data
+        """
+        logging.info(f"Generating dense embeddings for {len(chunks)} chunks using model '{model_name}'")
+        
+        results: dict[str, Any] = {}
+        
+        for i in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[i:i + batch_size]
+            logging.info(f"Processing batch {i//batch_size + 1}/{(len(chunks) + batch_size - 1)//batch_size}")
+            
+            batch_texts = []
+            batch_chunk_hashes = []
+            
+            for chunk in batch_chunks:
+                chunk_hash = chunk['chunk_hash']
+                content = chunk['content']
+                
+                if not content.strip():
+                    logging.warning(f"Skipping empty chunk: {chunk_hash}")
+                    continue
+                
+                batch_texts.append(content)
+                batch_chunk_hashes.append(chunk_hash)
+            
+            if not batch_texts:
+                continue
+            
+            try:
+                batch_embeddings = model.model_instance.encode(batch_texts, convert_to_tensor=False)
+                assert isinstance(batch_embeddings, np.ndarray), "batch_embeddings must be a numpy array"
+                
+                for j, chunk_hash in enumerate(batch_chunk_hashes):
+                    if chunk_hash not in results:
+                        results[chunk_hash] = {}
+                    
+                    assert hasattr(batch_embeddings[j], 'tolist'), "batch_embeddings[j] must have a tolist method"
+                    results[chunk_hash][model_name] = {
+                        'type': 'dense',
+                        'vector': batch_embeddings[j].tolist()
+                    }
+            except Exception as e:
+                logging.error(f"Failed to generate dense embeddings for batch with model {model_name}: {e}")
+                continue
+        
+        logging.info(f"Generated dense embeddings for {len(results)} chunks")
+        return results
+    
+    def _generate_sparse_embeddings_for_model(
+        self,
+        chunks: List[Dict[str, Any]],
+        model_name: str,
+        model: EmbeddingModel,
+        batch_size: int
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Generate sparse embeddings for a specific model.
+        
+        Args:
+            chunks: List of chunk dictionaries
+            model_name: Name of the model
+            model: EmbeddingModel instance
+            batch_size: Batch size for processing
+            
+        Returns:
+            Dictionary mapping chunk_hash to embedding data
+        """
+        logging.info(f"Generating sparse embeddings for {len(chunks)} chunks using model '{model_name}'")
+        
+        results: dict[str, Any] = {}
+        
+        for i in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[i:i + batch_size]
+            logging.info(f"Processing batch {i//batch_size + 1}/{(len(chunks) + batch_size - 1)//batch_size}")
+            
+            batch_texts = []
+            batch_chunk_hashes = []
+            
+            for chunk in batch_chunks:
+                chunk_hash = chunk['chunk_hash']
+                content = chunk['content']
+                
+                if not content.strip():
+                    logging.warning(f"Skipping empty chunk: {chunk_hash}")
+                    continue
+                
+                batch_texts.append(content)
+                batch_chunk_hashes.append(chunk_hash)
+            
+            if not batch_texts:
+                continue
+            
+            try:
+                batch_embeddings = model.model_instance.encode(batch_texts)
+                
+                for j, chunk_hash in enumerate(batch_chunk_hashes):
+                    if chunk_hash not in results:
+                        results[chunk_hash] = {}
+                    
+                    sparse_embedding = batch_embeddings[j].coalesce()
+                    sparse_dict = {
+                        'indices': sparse_embedding.indices().tolist()[0],
+                        'values': sparse_embedding.values().tolist()
+                    }
+                    assert len(sparse_dict['indices']) == len(sparse_dict['values']), "indices and values must have the same length"
+                    
+                    results[chunk_hash][model_name] = {
+                        'type': 'sparse',
+                        'vector': sparse_dict
+                    }
+            except Exception as e:
+                logging.error(f"Failed to generate sparse embeddings for batch with model {model_name}: {e}")
+                continue
+        
+        logging.info(f"Generated sparse embeddings for {len(results)} chunks")
+        return results
 
 
 def get_available_corpora(session: Session) -> List[str]:
@@ -537,28 +722,32 @@ def main():
         },
     ]
     
-    # Configuration parameters
-    for corpus_name in get_available_corpora():
+    # Load configuration
+    config = cfg.load_config_from_env()
+    db_config = config.database
+    
+    # Create database session
+    with get_session(db_config) as session:
+        # Initialize embedding pipeline
+        pipeline = BOEEmbeddingPipeline(model_configs)
+        
+        # Get available corpora
+        corpora = get_available_corpora(session)
+        
+        # Configuration parameters
         chunk_limit = None  # Set to a number to limit chunks processed, None for all
         batch_size = 4096
         
         print("BOE Embedding Pipeline Configuration:")
         print("  Models:")
-        for config in model_configs:
-            print(f"    - {config['name']} ({config['type']})")
-        print(f"  Corpus: {corpus_name}")
+        for model_config in model_configs:
+            print(f"    - {model_config['name']} ({model_config['type']})")
         print(f"  Chunk limit: {chunk_limit if chunk_limit else 'All chunks'}")
         print(f"  Batch size: {batch_size}")
-        print(f"  Available corpora: {get_available_corpora()}")
+        print(f"  Available corpora: {corpora}")
         
-        # Load configuration
-        config = cfg.load_config_from_env()
-        db_config = config.database
-        
-        # Create database session
-        with get_session(db_config) as session:
-            # Initialize embedding pipeline
-            pipeline = BOEEmbeddingPipeline(model_configs)
+        for corpus_name in corpora:
+            print(f"\nProcessing corpus: {corpus_name}")
             
             # Process embeddings for the corpus
             try:
@@ -574,11 +763,11 @@ def main():
                 print("EMBEDDING GENERATION COMPLETE")
                 print("="*60)
                 print(f"Corpus: {corpus_name}")
-                print(f"Total chunks processed: {stats['total_chunks']}")
-                print(f"Chunks with embeddings: {stats['chunks_with_embeddings']}")
-                print(f"Dense embeddings: {stats['dense_embeddings_inserted']} inserted, {stats['dense_embeddings_existing']} existing")
-                print(f"Sparse embeddings: {stats['sparse_embeddings_inserted']} inserted, {stats['sparse_embeddings_existing']} existing")
-                print(f"Total embeddings: {stats['total_embeddings_inserted']} inserted, {stats['total_embeddings_existing']} existing")
+                print(f"Models processed: {stats['models_processed']}")
+                print(f"Models skipped (already complete): {stats['models_skipped']}")
+                print(f"Dense embeddings inserted: {stats['dense_embeddings_inserted']}")
+                print(f"Sparse embeddings inserted: {stats['sparse_embeddings_inserted']}")
+                print(f"Total embeddings inserted: {stats['total_embeddings_inserted']}")
                 print("="*60)
                 
             except Exception as e:
