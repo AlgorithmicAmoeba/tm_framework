@@ -311,7 +311,8 @@ class BOEDimRedPipeline:
         """
         Check if all reduction combinations already exist for a given corpus/model.
         
-        This is an early check to avoid fetching embeddings when all work is done.
+        This checks that every source chunk hash has a corresponding reduced embedding
+        for all algorithm/dimension combinations.
         
         Args:
             session: Database session
@@ -322,45 +323,56 @@ class BOEDimRedPipeline:
         Returns:
             True if all reductions exist, False otherwise
         """
-        # Get expected count of source embeddings
-        if source_type == 'dense':
-            count_query = text("""
-                SELECT COUNT(DISTINCT e.boe_chunked_document_hash)
-                FROM pipeline.boe_embedding e
-                JOIN pipeline.boe_chunked_document c ON e.boe_chunked_document_hash = c.chunk_hash
-                WHERE c.corpus_name = :corpus_name
-                AND e.model_name = :model_name
-            """)
-        else:
-            count_query = text("""
-                SELECT COUNT(DISTINCT e.boe_chunked_document_hash)
-                FROM pipeline.boe_embedding_sparse e
-                JOIN pipeline.boe_chunked_document c ON e.boe_chunked_document_hash = c.chunk_hash
-                WHERE c.corpus_name = :corpus_name
-                AND e.model_name = :model_name
-            """)
-        
-        result = session.execute(count_query, {
-            "corpus_name": corpus_name,
-            "model_name": source_model_name
-        })
-        expected_count = result.scalar() or 0
-        
-        logging.info(f"all_reductions_exist: corpus={corpus_name}, model={source_model_name}, expected_count={expected_count}")
-        
-        if expected_count == 0:
-            return True  # No source embeddings, nothing to reduce
-        
         # Check each algorithm/dimension combination
         for algorithm in self.ALGORITHMS:
             for n_dims in self.TARGET_DIMS:
-                existing_count = self.check_existing_embeddings(
-                    session, corpus_name, source_model_name, algorithm, n_dims
-                )
-                logging.info(f"  {algorithm}/{n_dims}: existing={existing_count}, expected={expected_count}")
-                if existing_count < expected_count:
+                # Find source chunk hashes that don't have reduced embeddings
+                if source_type == 'dense':
+                    missing_query = text("""
+                        SELECT 1
+                        FROM pipeline.boe_embedding e
+                        JOIN pipeline.boe_chunked_document c ON e.boe_chunked_document_hash = c.chunk_hash
+                        WHERE c.corpus_name = :corpus_name
+                        AND e.model_name = :model_name
+                        AND NOT EXISTS (
+                            SELECT 1 FROM pipeline.boe_embedding_reduced r
+                            WHERE r.boe_chunked_document_hash = e.boe_chunked_document_hash
+                            AND r.source_model_name = :model_name
+                            AND r.algorithm = :algorithm
+                            AND r.target_dims = :target_dims
+                        )
+                        LIMIT 1
+                    """)
+                else:
+                    missing_query = text("""
+                        SELECT 1
+                        FROM pipeline.boe_embedding_sparse e
+                        JOIN pipeline.boe_chunked_document c ON e.boe_chunked_document_hash = c.chunk_hash
+                        WHERE c.corpus_name = :corpus_name
+                        AND e.model_name = :model_name
+                        AND NOT EXISTS (
+                            SELECT 1 FROM pipeline.boe_embedding_reduced r
+                            WHERE r.boe_chunked_document_hash = e.boe_chunked_document_hash
+                            AND r.source_model_name = :model_name
+                            AND r.algorithm = :algorithm
+                            AND r.target_dims = :target_dims
+                        )
+                        LIMIT 1
+                    """)
+                
+                result = session.execute(missing_query, {
+                    "corpus_name": corpus_name,
+                    "model_name": source_model_name,
+                    "algorithm": algorithm,
+                    "target_dims": n_dims
+                })
+                
+                if result.fetchone() is not None:
+                    # Found at least one missing reduction
+                    logging.info(f"Missing reductions for {source_model_name} ({source_type}): {algorithm}/{n_dims}")
                     return False
         
+        logging.info(f"All reductions exist for {source_model_name} ({source_type}), skipping")
         return True
     
     def store_reduced_embeddings(
