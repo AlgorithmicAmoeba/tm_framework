@@ -25,6 +25,9 @@ class BOEDimRedPipeline:
     # Configuration for dimensionality reduction
     TARGET_DIMS = [10, 20]
     ALGORITHMS = ['umap', 'pca']
+    MAX_DIM_BY_SPARSE_MODEL = {
+        'naver/splade-v3': 30522,
+    }
     
     def __init__(self):
         """Initialize the dimensionality reduction pipeline."""
@@ -144,20 +147,16 @@ class BOEDimRedPipeline:
         
         chunk_hashes = []
         sparse_data = []
-        max_dim = 0
+        max_dim = self.MAX_DIM_BY_SPARSE_MODEL[model_name]
         
         for row in result:
             chunk_hashes.append(row[0])
             sparse_vec = row[1] if isinstance(row[1], dict) else json.loads(row[1])
             sparse_data.append(sparse_vec)
-            
-            # Track maximum dimension
-            if sparse_vec['indices']:
-                max_dim = max(max_dim, max(sparse_vec['indices']) + 1)
         
         if not sparse_data:
             logging.warning(f"No sparse embeddings found for corpus '{corpus_name}', model '{model_name}'")
-            return [], sp.csr_matrix((0, 0)), 0
+            return [], sp.csr_matrix((0, 0)), max_dim
         
         # Build sparse matrix
         n_samples = len(sparse_data)
@@ -244,7 +243,7 @@ class BOEDimRedPipeline:
                 metric='cosine',
                 random_state=42,
                 low_memory=True,
-                n_jobs=-1
+                n_jobs=1,
             )
             reduced = reducer.fit_transform(embeddings)
             
@@ -405,8 +404,39 @@ class BOEDimRedPipeline:
             Dictionary with processing statistics
         """
         reductions: list[dict[str, Any]] = []
+        n_embeddings = len(chunk_hashes)
         
-        # Scale embeddings once
+        # First pass: check what work needs to be done for all algorithm/dimension combinations
+        work_needed: dict[tuple[str, int], int] = {}
+        for algorithm in self.ALGORITHMS:
+            for n_dims in self.TARGET_DIMS:
+                existing_count = self.check_existing_embeddings(
+                    session, corpus_name, source_model_name, algorithm, n_dims
+                )
+                if existing_count < n_embeddings:
+                    work_needed[(algorithm, n_dims)] = existing_count
+        
+        # Early exit if all reductions already exist
+        if not work_needed:
+            logging.info(f"All reductions already exist for {source_model_name} ({source_type}), skipping scaling and reduction")
+            for algorithm in self.ALGORITHMS:
+                for n_dims in self.TARGET_DIMS:
+                    reductions.append({
+                        "algorithm": algorithm,
+                        "target_dims": n_dims,
+                        "inserted": 0,
+                        "existing": n_embeddings,
+                        "skipped": True
+                    })
+            return {
+                "source_model": source_model_name,
+                "source_type": source_type,
+                "n_embeddings": n_embeddings,
+                "reductions": reductions
+            }
+        
+        # Only scale embeddings if there's work to do
+        logging.info(f"Work needed for {len(work_needed)} algorithm/dimension combinations")
         scaled_embeddings = self.scale_embeddings(embeddings, is_sparse)
         
         # Apply each algorithm and dimension combination
@@ -414,18 +444,14 @@ class BOEDimRedPipeline:
             for n_dims in self.TARGET_DIMS:
                 logging.info(f"Processing {source_model_name} ({source_type}) with {algorithm}/{n_dims}")
                 
-                # Check if already processed
-                existing_count = self.check_existing_embeddings(
-                    session, corpus_name, source_model_name, algorithm, n_dims
-                )
-                
-                if existing_count == len(chunk_hashes):
-                    logging.info(f"Skipping {algorithm}/{n_dims} - all {existing_count} embeddings already exist")
+                # Check if this combination needs work
+                if (algorithm, n_dims) not in work_needed:
+                    logging.info(f"Skipping {algorithm}/{n_dims} - all {n_embeddings} embeddings already exist")
                     reductions.append({
                         "algorithm": algorithm,
                         "target_dims": n_dims,
                         "inserted": 0,
-                        "existing": existing_count,
+                        "existing": n_embeddings,
                         "skipped": True
                     })
                     continue
@@ -456,7 +482,7 @@ class BOEDimRedPipeline:
         return {
             "source_model": source_model_name,
             "source_type": source_type,
-            "n_embeddings": len(chunk_hashes),
+            "n_embeddings": n_embeddings,
             "reductions": reductions
         }
     
@@ -537,18 +563,19 @@ class BOEDimRedPipeline:
         }
 
 
-def get_available_corpora() -> list[str]:
+def get_available_corpora(session: Session) -> list[str]:
     """
     Get list of available corpora from the chunking pipeline.
     
     Returns:
         List of corpus names
     """
-    return [
-        "imdb_reviews",
-        "trec_questions",
-        "twitter-financial-news",
-    ]
+    query = text("""
+        SELECT DISTINCT corpus_name FROM pipeline.boe_chunked_document
+    """)
+    result = session.execute(query)
+    return [row[0] for row in result]
+
 
 
 def main():
@@ -561,13 +588,7 @@ def main():
     
     # Direct logging to file
     logging.getLogger().addHandler(logging.FileHandler("boe_dim_red.log"))
-    
-    print("BOE Dimensionality Reduction Pipeline")
-    print("="*60)
-    print("Algorithms: UMAP, PCA")
-    print("Target dimensions: 10, 20")
-    print(f"Available corpora: {get_available_corpora()}")
-    print("="*60)
+
     
     # Load configuration
     config = cfg.load_config_from_env()
@@ -575,11 +596,19 @@ def main():
     
     # Create database session
     with get_session(db_config) as session:
+        print("BOE Dimensionality Reduction Pipeline")
+        print("="*60)
+        print("Algorithms: UMAP, PCA")
+        print("Target dimensions: 10, 20")
+        print(f"Available corpora: {get_available_corpora(session)}")
+        print("="*60)
+
+        
         # Initialize pipeline
         pipeline = BOEDimRedPipeline()
         
         # Process each corpus
-        for corpus_name in get_available_corpora():
+        for corpus_name in get_available_corpora(session):
             print(f"\nProcessing corpus: {corpus_name}")
             print("-"*40)
             
