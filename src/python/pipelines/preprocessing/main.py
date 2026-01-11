@@ -235,11 +235,11 @@ def store_preprocessed_documents(session: Session, corpus_name: str, processed_d
     ).scalars().fetchall()
     existing_docs_dict = {doc_hash: False for doc_hash in existing_docs}
 
-    existing_vocabulary_only_docs = session.execute(
-        text("SELECT raw_document_hash FROM pipeline.vocabulary_document WHERE corpus_name = :corpus_name"),
-        {"corpus_name": corpus_name}
-    ).scalars().fetchall()
-    existing_vocabulary_only_docs_dict = {doc_hash: False for doc_hash in existing_vocabulary_only_docs}
+    # existing_vocabulary_only_docs = session.execute(
+    #     text("SELECT raw_document_hash FROM pipeline.vocabulary_document WHERE corpus_name = :corpus_name"),
+    #     {"corpus_name": corpus_name}
+    # ).scalars().fetchall()
+    # existing_vocabulary_only_docs_dict = {doc_hash: False for doc_hash in existing_vocabulary_only_docs}
 
     existing_vectors = session.execute(
         text("SELECT raw_document_hash, terms FROM pipeline.tfidf_vector WHERE corpus_name = :corpus_name"),
