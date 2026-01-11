@@ -1,18 +1,40 @@
 """
 BOE (Bag of Embeddings) Chunking pipeline for document corpora.
 This pipeline chunks documents into fixed character lengths with sliding windows
-and filters chunks to contain only vocabulary words from the corpus.
+and extracts vocabulary words from each chunk.
 """
 import logging
+import sys
 from typing import Any, List, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-import spacy
 
 from database import get_session
 import configuration as cfg
 from shared_code import color_logging_text, hash_string
+
+# Import TextPreprocessor from preprocessing pipeline
+sys.path.insert(0, str(__file__).replace('/boe_01_chunking/main.py', ''))
+from preprocessing.main import TextPreprocessor
+
+# Global text preprocessor instance (lazy-loaded)
+_text_preprocessor = None
+
+
+def get_text_preprocessor() -> TextPreprocessor:
+    """Get or initialize the text preprocessor for batch cleaning."""
+    global _text_preprocessor
+    if _text_preprocessor is None:
+        _text_preprocessor = TextPreprocessor(
+            remove_stopwords=True,
+            lemmatize=True,
+            remove_numbers=True,
+            remove_urls=True,
+            min_chars=3
+        )
+        logging.info("Initialized TextPreprocessor for chunk cleaning")
+    return _text_preprocessor
 
 
 def create_chunks(text: str, chunk_size: int = 1280, overlap: int = 256) -> List[Tuple[str, int, int]]:
@@ -48,33 +70,20 @@ def create_chunks(text: str, chunk_size: int = 1280, overlap: int = 256) -> List
     return chunks
 
 
-def filter_chunk_vocabulary(chunk_content: str, vocabulary_words: set, spacy_model=None) -> str:
+def extract_vocabulary_words_from_cleaned(cleaned_text: str, vocabulary_words: set) -> str:
     """
-    Filter chunk content to contain only vocabulary words from the corpus.
-    Uses lemmatization to match words with the vocabulary.
+    Extract vocabulary words from already-cleaned text.
     
     Args:
-        chunk_content: Raw chunk content
+        cleaned_text: Pre-cleaned text content
         vocabulary_words: Set of vocabulary words from the corpus
-        spacy_model: Spacy model for lemmatization (optional)
         
     Returns:
-        String containing only vocabulary words from the chunk
+        Space-separated string of vocabulary words found in the text (with duplicates)
     """
-    if spacy_model is None:
-        # Simple word filtering without lemmatization
-        words = chunk_content.split()
-        vocabulary_only_words = [word.lower() for word in words if word.lower() in vocabulary_words]
-    else:
-        # Use spacy for lemmatization
-        doc = spacy_model(chunk_content)
-        vocabulary_only_words = []
-        for token in doc:
-            if not token.is_stop and not token.is_punct and not token.is_space:
-                lemma = token.lemma_.lower()
-                if lemma in vocabulary_words:
-                    vocabulary_only_words.append(lemma)
-    
+    # Split on whitespace and filter to only vocabulary words, keeping duplicates
+    words = cleaned_text.split()
+    vocabulary_only_words = [word for word in words if word in vocabulary_words]
     return ' '.join(vocabulary_only_words)
 
 
@@ -102,13 +111,46 @@ def get_corpus_vocabulary(session: Session, corpus_name: str) -> set:
     return vocabulary_words
 
 
-def chunk_documents(session: Session, corpus_name: str, chunk_size: int = 1280, overlap: int = 256) -> dict[str, Any]:
+def get_unchunked_documents(session: Session, corpus_name: str) -> List[Tuple[str, str]]:
     """
-    Chunk all documents in a corpus with sliding windows.
+    Fetch documents that don't have any chunks yet.
+    
+    Args:
+        session: Database session
+        corpus_name: Name of the corpus
+        
+    Returns:
+        List of tuples containing (document_hash, content) for unchunked documents
+    """
+    query = text("""
+        SELECT urd.document_hash, urd.content
+        FROM pipeline.used_raw_document urd
+        WHERE urd.corpus_name = :corpus_name
+        AND NOT EXISTS (
+            SELECT 1 FROM pipeline.boe_chunked_document bcd
+            WHERE bcd.raw_document_hash = urd.document_hash
+            AND bcd.corpus_name = urd.corpus_name
+        )
+    """)
+    result = session.execute(query, {"corpus_name": corpus_name})
+    return [(row[0], row[1]) for row in result]
+
+
+def chunk_documents(
+    session: Session, 
+    corpus_name: str, 
+    docs: List[Tuple[str, str]],
+    chunk_size: int = 1280, 
+    overlap: int = 256
+) -> dict[str, Any]:
+    """
+    Chunk provided documents with sliding windows and extract vocabulary words.
+    Uses batch processing for text cleaning to improve performance.
     
     Args:
         session: Database session
         corpus_name: Name of the corpus to chunk
+        docs: List of tuples containing (document_hash, content)
         chunk_size: Maximum character length of each chunk
         overlap: Number of characters to overlap between chunks
         
@@ -117,38 +159,20 @@ def chunk_documents(session: Session, corpus_name: str, chunk_size: int = 1280, 
     """
     logging.info(f"Starting chunking for corpus: {corpus_name}")
     
-    # Get vocabulary words for the corpus
+    if not docs:
+        logging.info(f"No documents to chunk for corpus: {corpus_name}")
+        return {"total_chunks": 0, "processed_documents": 0, "chunks": [], "vocabulary_size": 0}
+    
+    # Get vocabulary words for the corpus (may be empty)
     vocabulary_words = get_corpus_vocabulary(session, corpus_name)
     
     if not vocabulary_words:
-        logging.warning(f"No vocabulary found for corpus: {corpus_name}")
-        return {"total_chunks": 0, "processed_documents": 0}
-    
-    # Initialize spacy model for lemmatization
-    try:
-        spacy_model = spacy.load('en_core_web_sm', exclude=['tok2vec', 'parser', 'ner'])
-        logging.info("Loaded spacy model for lemmatization")
-    except OSError:
-        logging.warning("Could not load spacy model, using simple word filtering")
-        spacy_model = None
-    
-    # Fetch documents from the corpus
-    fetch_docs_query = text("""
-        SELECT document_hash, content 
-        FROM pipeline.used_raw_document
-        WHERE corpus_name = :corpus_name
-    """)
-    
-    result = session.execute(fetch_docs_query, {"corpus_name": corpus_name})
-    docs = [(row[0], row[1]) for row in result]
-    
-    if not docs:
-        logging.warning(f"No preprocessed documents found for corpus: {corpus_name}")
-        return {"total_chunks": 0, "processed_documents": 0}
+        logging.warning(f"No vocabulary found for corpus: {corpus_name}, chunks will have empty vocabulary_words")
     
     logging.info(f"Processing {len(docs)} documents for chunking")
     
-    all_chunks = []
+    # Step 1: Create all chunks first (without cleaning)
+    chunk_data_list = []  # List of (doc_hash, chunk_content, start_pos, end_pos)
     processed_docs = 0
     
     for doc_hash, content in docs:
@@ -159,30 +183,49 @@ def chunk_documents(session: Session, corpus_name: str, chunk_size: int = 1280, 
         chunks = create_chunks(content, chunk_size, overlap)
         
         for chunk_content, start_pos, end_pos in chunks:
-            # Filter chunk to contain only vocabulary words
-            vocabulary_only_content = filter_chunk_vocabulary(chunk_content, vocabulary_words, spacy_model)
-            
-            # Skip chunks with no vocabulary words
-            if not vocabulary_only_content.strip():
+            # Skip empty chunks
+            if not chunk_content.strip():
                 continue
             
-            # Create chunk hash
-            chunk_hash = hash_string(chunk_content)
-            
-            all_chunks.append({
-                'raw_document_hash': doc_hash,
-                'corpus_name': corpus_name,
-                'chunk_hash': chunk_hash,
-                'content': chunk_content,
-                'chunk_vocabulary_words': vocabulary_only_content,
-                'chunk_start': start_pos,
-                'chunk_end': end_pos
-            })
+            chunk_data_list.append((doc_hash, chunk_content, start_pos, end_pos))
         
         processed_docs += 1
         
         if processed_docs % 100 == 0:
-            logging.info(f"Processed {processed_docs} documents, created {len(all_chunks)} chunks so far")
+            logging.info(f"Chunked {processed_docs} documents, created {len(chunk_data_list)} chunks so far")
+    
+    logging.info(f"Created {len(chunk_data_list)} chunks from {processed_docs} documents")
+    
+    if not chunk_data_list:
+        return {"total_chunks": 0, "processed_documents": processed_docs, "chunks": [], "vocabulary_size": len(vocabulary_words)}
+    
+    # Step 2: Clean all chunk contents in batch using TextPreprocessor
+    logging.info(f"Cleaning {len(chunk_data_list)} chunks in batch...")
+    chunk_contents = [chunk_content for _, chunk_content, _, _ in chunk_data_list]
+    preprocessor = get_text_preprocessor()
+    cleaned_texts = preprocessor._clean_texts(chunk_contents)
+    logging.info("Batch cleaning complete")
+    
+    # Step 3: Extract vocabulary words and build final chunk data
+    all_chunks = []
+    for i, (doc_hash, chunk_content, start_pos, end_pos) in enumerate(chunk_data_list):
+        cleaned_text = cleaned_texts[i]
+        
+        # Extract vocabulary words from cleaned text
+        vocabulary_only_content = extract_vocabulary_words_from_cleaned(cleaned_text, vocabulary_words)
+        
+        # Create chunk hash from original content
+        chunk_hash = hash_string(chunk_content)
+        
+        all_chunks.append({
+            'raw_document_hash': doc_hash,
+            'corpus_name': corpus_name,
+            'chunk_hash': chunk_hash,
+            'content': chunk_content,
+            'chunk_vocabulary_words': vocabulary_only_content,
+            'chunk_start': start_pos,
+            'chunk_end': end_pos
+        })
     
     logging.info(f"Chunking complete: {len(all_chunks)} chunks from {processed_docs} documents")
     
@@ -197,7 +240,7 @@ def chunk_documents(session: Session, corpus_name: str, chunk_size: int = 1280, 
 def store_chunked_documents(session: Session, corpus_name: str, chunking_data: dict[str, Any]):
     """
     Store chunked documents in the database.
-    Uses a delete-insert pattern for idempotency.
+    Inserts new chunks with ON CONFLICT DO NOTHING for idempotency.
     
     Args:
         session: Database session
@@ -206,34 +249,14 @@ def store_chunked_documents(session: Session, corpus_name: str, chunking_data: d
     """
     logging.info(f"Storing chunked documents for corpus: {corpus_name}")
     
-    # Get existing chunks to track what's already processed
-    existing_chunks = session.execute(
-        text("""
-            SELECT raw_document_hash, chunk_hash 
-            FROM pipeline.boe_chunked_document 
-            WHERE corpus_name = :corpus_name
-        """),
-        {"corpus_name": corpus_name}
-    ).fetchall()
-    existing_chunks_dict = {(row[0], row[1]): False for row in existing_chunks}
-    
     # Track statistics
-    chunks_existing = 0
     chunks_inserted = 0
     
     # Insert chunks
     chunks = chunking_data['chunks']
     
     for chunk_data in chunks:
-        chunk_key = (chunk_data['raw_document_hash'], chunk_data['chunk_hash'])
-        
-        # Mark chunk as processed if it exists
-        if chunk_key in existing_chunks_dict:
-            existing_chunks_dict[chunk_key] = True
-            chunks_existing += 1
-            continue
-        
-        # Insert chunk
+        # Insert chunk with ON CONFLICT DO NOTHING for idempotency
         insert_chunk_query = text("""
             INSERT INTO pipeline.boe_chunked_document 
             (raw_document_hash, corpus_name, chunk_hash, content, chunk_vocabulary_words, chunk_start, chunk_end)
@@ -241,40 +264,14 @@ def store_chunked_documents(session: Session, corpus_name: str, chunking_data: d
             ON CONFLICT DO NOTHING
         """)
         
-        session.execute(insert_chunk_query, chunk_data)
-        chunks_inserted += 1
-    
-    session.commit()
-    
-    # Delete chunks that were not marked as processed
-    chunks_deleted = 0
-    for chunk_key, processed in existing_chunks_dict.items():
-        if processed:
-            continue
-        
-        raw_document_hash, chunk_hash = chunk_key
-        delete_chunk_query = text("""
-            DELETE FROM pipeline.boe_chunked_document
-            WHERE corpus_name = :corpus_name 
-            AND raw_document_hash = :raw_document_hash 
-            AND chunk_hash = :chunk_hash
-        """)
-        
-        session.execute(
-            delete_chunk_query,
-            {
-                "corpus_name": corpus_name,
-                "raw_document_hash": raw_document_hash,
-                "chunk_hash": chunk_hash
-            }
-        )
-        chunks_deleted += 1
+        result = session.execute(insert_chunk_query, chunk_data)
+        if result.rowcount > 0:
+            chunks_inserted += 1
     
     session.commit()
     
     # Log statistics
     logging.info(f"Chunking storage complete for corpus: {corpus_name}")
-    logging.info(f"  Chunks existing: {chunks_existing}")
     
     if chunks_inserted:
         logging.info(color_logging_text(
@@ -283,19 +280,12 @@ def store_chunked_documents(session: Session, corpus_name: str, chunking_data: d
         ))
     else:
         logging.info(f"  Chunks inserted: {chunks_inserted}")
-    
-    if chunks_deleted:
-        logging.info(color_logging_text(
-            f"  Chunks deleted: {chunks_deleted}",
-            color='red'
-        ))
-    else:
-        logging.info(f"  Chunks deleted: {chunks_deleted}")
 
 
 def process_corpus_chunking(session: Session, corpus_name: str, chunk_size: int = 1280, overlap: int = 256):
     """
     Process chunking for a specified corpus.
+    Only processes documents that haven't been chunked yet.
     
     Args:
         session: Database session
@@ -308,8 +298,17 @@ def process_corpus_chunking(session: Session, corpus_name: str, chunk_size: int 
     """
     logging.info(f"Starting chunking pipeline for corpus: {corpus_name}")
     
-    # Chunk the documents
-    chunking_data = chunk_documents(session, corpus_name, chunk_size, overlap)
+    # Get only documents that haven't been chunked yet
+    unchunked_docs = get_unchunked_documents(session, corpus_name)
+    
+    if not unchunked_docs:
+        logging.info(f"All documents in corpus '{corpus_name}' have already been chunked, skipping")
+        return 0, 0
+    
+    logging.info(f"Found {len(unchunked_docs)} unchunked documents to process")
+    
+    # Chunk only the unchunked documents
+    chunking_data = chunk_documents(session, corpus_name, unchunked_docs, chunk_size, overlap)
     
     if chunking_data['total_chunks'] == 0:
         logging.warning(f"No chunks created for corpus: {corpus_name}")
@@ -337,7 +336,7 @@ def get_available_corpora(session: Session) -> list[str]:
     Get list of available corpora from the database.
     """
     query = text("""
-        SELECT DISTINCT corpus_name FROM pipeline.boe_chunked_document
+        SELECT DISTINCT name FROM pipeline.corpus
     """)
     result = session.execute(query)
     return [row[0] for row in result]
