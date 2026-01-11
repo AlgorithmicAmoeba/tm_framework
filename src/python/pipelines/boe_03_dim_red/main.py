@@ -23,7 +23,7 @@ class BOEDimRedPipeline:
     """Main class for dimensionality reduction of BOE embeddings."""
     
     # Configuration for dimensionality reduction
-    TARGET_DIMS = [10, 20]
+    TARGET_DIMS = [10, 20, 100]
     ALGORITHMS = ['umap', 'pca']
     MAX_DIM_BY_SPARSE_MODEL = {
         'naver/splade-v3': 30522,
@@ -301,6 +301,68 @@ class BOEDimRedPipeline:
         count = result.scalar()
         return count if count is not None else 0
     
+    def all_reductions_exist(
+        self,
+        session: Session,
+        corpus_name: str,
+        source_model_name: str,
+        source_type: str
+    ) -> bool:
+        """
+        Check if all reduction combinations already exist for a given corpus/model.
+        
+        This is an early check to avoid fetching embeddings when all work is done.
+        
+        Args:
+            session: Database session
+            corpus_name: Corpus name
+            source_model_name: Source embedding model name
+            source_type: 'dense' or 'sparse'
+            
+        Returns:
+            True if all reductions exist, False otherwise
+        """
+        # Get expected count of source embeddings
+        if source_type == 'dense':
+            count_query = text("""
+                SELECT COUNT(DISTINCT e.boe_chunked_document_hash)
+                FROM pipeline.boe_embedding e
+                JOIN pipeline.boe_chunked_document c ON e.boe_chunked_document_hash = c.chunk_hash
+                WHERE c.corpus_name = :corpus_name
+                AND e.model_name = :model_name
+            """)
+        else:
+            count_query = text("""
+                SELECT COUNT(DISTINCT e.boe_chunked_document_hash)
+                FROM pipeline.boe_embedding_sparse e
+                JOIN pipeline.boe_chunked_document c ON e.boe_chunked_document_hash = c.chunk_hash
+                WHERE c.corpus_name = :corpus_name
+                AND e.model_name = :model_name
+            """)
+        
+        result = session.execute(count_query, {
+            "corpus_name": corpus_name,
+            "model_name": source_model_name
+        })
+        expected_count = result.scalar() or 0
+        
+        logging.info(f"all_reductions_exist: corpus={corpus_name}, model={source_model_name}, expected_count={expected_count}")
+        
+        if expected_count == 0:
+            return True  # No source embeddings, nothing to reduce
+        
+        # Check each algorithm/dimension combination
+        for algorithm in self.ALGORITHMS:
+            for n_dims in self.TARGET_DIMS:
+                existing_count = self.check_existing_embeddings(
+                    session, corpus_name, source_model_name, algorithm, n_dims
+                )
+                logging.info(f"  {algorithm}/{n_dims}: existing={existing_count}, expected={expected_count}")
+                if existing_count < expected_count:
+                    return False
+        
+        return True
+    
     def store_reduced_embeddings(
         self, 
         session: Session,
@@ -516,6 +578,11 @@ class BOEDimRedPipeline:
             logging.info(f"Processing dense model: {model_name}")
             logging.info("="*60)
             
+            # Early check: skip fetching embeddings if all reductions already exist
+            if self.all_reductions_exist(session, corpus_name, model_name, 'dense'):
+                logging.info(f"All reductions already exist for dense model '{model_name}', skipping")
+                continue
+            
             chunk_hashes, embeddings = self.fetch_dense_embeddings(session, corpus_name, model_name)
             
             if len(chunk_hashes) == 0:
@@ -538,6 +605,11 @@ class BOEDimRedPipeline:
             logging.info("="*60)
             logging.info(f"Processing sparse model: {model_name}")
             logging.info("="*60)
+            
+            # Early check: skip fetching embeddings if all reductions already exist
+            if self.all_reductions_exist(session, corpus_name, model_name, 'sparse'):
+                logging.info(f"All reductions already exist for sparse model '{model_name}', skipping")
+                continue
             
             chunk_hashes, embeddings, _ = self.fetch_sparse_embeddings(session, corpus_name, model_name)
             
