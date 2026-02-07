@@ -1,7 +1,7 @@
 """
 BOE (Bag of Embeddings) Dimensionality Reduction pipeline.
 This pipeline reads embeddings from the database, applies centering and scaling,
-then reduces dimensionality using UMAP and PCA to 10 and 20 dimensions.
+then reduces dimensionality using UMAP and PCA to the target dimensions.
 """
 import logging
 import json
@@ -23,7 +23,7 @@ class BOEDimRedPipeline:
     """Main class for dimensionality reduction of BOE embeddings."""
     
     # Configuration for dimensionality reduction
-    TARGET_DIMS = [10, 20, 100]
+    TARGET_DIMS = [20, 50, 100]
     ALGORITHMS = ['umap', 'pca']
     MAX_DIM_BY_SPARSE_MODEL = {
         'naver/splade-v3': 30522,
