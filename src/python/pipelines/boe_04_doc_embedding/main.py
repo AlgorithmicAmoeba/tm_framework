@@ -92,7 +92,8 @@ class BOEDocEmbeddingPipeline:
         source_model_name: str,
         algorithm: str,
         target_dims: int,
-        padding_method: str
+        padding_method: str,
+        target_chunk_count: int
     ) -> bool:
         """
         Check if document embeddings already exist for a given combination.
@@ -114,6 +115,7 @@ class BOEDocEmbeddingPipeline:
             AND algorithm = :algorithm
             AND target_dims = :target_dims
             AND padding_method = :padding_method
+            AND target_chunk_count = :target_chunk_count
             LIMIT 1
         """)
         result = session.execute(query, {
@@ -121,7 +123,8 @@ class BOEDocEmbeddingPipeline:
             "source_model_name": source_model_name,
             "algorithm": algorithm,
             "target_dims": target_dims,
-            "padding_method": padding_method
+            "padding_method": padding_method,
+            "target_chunk_count": target_chunk_count
         })
         return result.fetchone() is not None
 
@@ -423,6 +426,7 @@ class BOEDocEmbeddingPipeline:
         algorithm: str,
         target_dims: int,
         padding_method: str,
+        target_chunk_count: int,
         doc_embeddings: dict[str, dict[str, Any]]
     ) -> tuple[int, int]:
         """
@@ -454,6 +458,7 @@ class BOEDocEmbeddingPipeline:
                 AND algorithm = :algorithm
                 AND target_dims = :target_dims
                 AND padding_method = :padding_method
+                AND target_chunk_count = :target_chunk_count
             """)
 
             existing = session.execute(check_query, {
@@ -462,7 +467,8 @@ class BOEDocEmbeddingPipeline:
                 "source_model_name": source_model_name,
                 "algorithm": algorithm,
                 "target_dims": target_dims,
-                "padding_method": padding_method
+                "padding_method": padding_method,
+                "target_chunk_count": target_chunk_count
             }).fetchone()
 
             if existing:
@@ -473,9 +479,9 @@ class BOEDocEmbeddingPipeline:
             insert_query = text("""
                 INSERT INTO pipeline.boe_document_embedding
                 (corpus_name, raw_document_hash, source_model_name, algorithm,
-                 target_dims, padding_method, vector, chunk_count, padded_to)
+                 target_dims, padding_method, target_chunk_count, vector, chunk_count, padded_to)
                 VALUES (:corpus_name, :raw_document_hash, :source_model_name, :algorithm,
-                        :target_dims, :padding_method, :vector, :chunk_count, :padded_to)
+                        :target_dims, :padding_method, :target_chunk_count, :vector, :chunk_count, :padded_to)
             """)
 
             session.execute(insert_query, {
@@ -485,6 +491,7 @@ class BOEDocEmbeddingPipeline:
                 "algorithm": algorithm,
                 "target_dims": target_dims,
                 "padding_method": padding_method,
+                "target_chunk_count": target_chunk_count,
                 "vector": embed_data["vector"].tolist(),
                 "chunk_count": embed_data["chunk_count"],
                 "padded_to": embed_data["padded_to"]
@@ -520,7 +527,13 @@ class BOEDocEmbeddingPipeline:
 
         # Check if document embeddings already exist
         if self.check_doc_embeddings_exist(
-            session, corpus_name, source_model_name, algorithm, target_dims, self.padding_method
+            session,
+            corpus_name,
+            source_model_name,
+            algorithm,
+            target_dims,
+            self.padding_method,
+            self.target_chunk_count
         ):
             logging.info(f"Document embeddings already exist for {source_model_name}/{algorithm}/{target_dims}, skipping")
             return {
@@ -560,8 +573,13 @@ class BOEDocEmbeddingPipeline:
 
         # Store document embeddings
         inserted, existing = self.store_document_embeddings(
-            session, corpus_name, source_model_name, algorithm, target_dims,
+            session,
+            corpus_name,
+            source_model_name,
+            algorithm,
+            target_dims,
             self.padding_method,
+            self.target_chunk_count,
             doc_embeddings
         )
 
@@ -672,7 +690,7 @@ def main():
         print(f"Available corpora: {get_available_corpora(session)}")
         print("=" * 60)
 
-        corpus_chunk_counts = {
+        corpus_chunk_counts: dict[str, int | list[int]] = {
             'battery-abstracts': 2,
             'goodreads-bookgenres': 2,
             'imdb_reviews': 4,
@@ -688,38 +706,58 @@ def main():
 
         # Process each corpus
         for corpus_name in get_available_corpora(session):
-            # Initialize pipeline
-            for padding_method in padding_methods:
-                pipeline = BOEDocEmbeddingPipeline(
-                    target_chunk_count=corpus_chunk_counts[corpus_name],
-                    knn_k=knn_k,
-                    noise_scale=noise_scale,
-                    padding_method=padding_method
-                )
-                print(f"\nProcessing corpus: {corpus_name} (padding_method={padding_method})")
-                print("-" * 40)
+            target_counts = corpus_chunk_counts.get(corpus_name)
+            if target_counts is None:
+                logging.warning("No target chunk count configured for corpus: %s", corpus_name)
+                continue
 
-                try:
-                    stats = pipeline.process_corpus(session, corpus_name)
+            if isinstance(target_counts, int):
+                target_counts = [target_counts]
 
-                    # Print statistics
-                    print(f"\nResults for {corpus_name} (padding_method={padding_method}):")
-
-                    for red_stats in stats["reductions_processed"]:
-                        if red_stats.get("skipped"):
-                            status = "skipped"
-                        else:
-                            status = f"{red_stats['inserted']} docs inserted, {red_stats['num_documents']} total docs"
-                        print(f"  {red_stats['source_model_name']}/{red_stats['algorithm']}/{red_stats['target_dims']}: {status}")
-
-                except Exception as e:
-                    logging.error(
-                        "Error processing corpus %s (padding_method=%s): %s",
-                        corpus_name,
-                        padding_method,
-                        str(e)
+            for target_chunk_count in target_counts:
+                # Initialize pipeline
+                for padding_method in padding_methods:
+                    pipeline = BOEDocEmbeddingPipeline(
+                        target_chunk_count=target_chunk_count,
+                        knn_k=knn_k,
+                        noise_scale=noise_scale,
+                        padding_method=padding_method
                     )
-                    raise
+                    print(
+                        f"\nProcessing corpus: {corpus_name} "
+                        f"(padding_method={padding_method}, target_chunk_count={target_chunk_count})"
+                    )
+                    print("-" * 40)
+
+                    try:
+                        stats = pipeline.process_corpus(session, corpus_name)
+
+                        # Print statistics
+                        print(
+                            f"\nResults for {corpus_name} "
+                            f"(padding_method={padding_method}, target_chunk_count={target_chunk_count}):"
+                        )
+
+                        for red_stats in stats["reductions_processed"]:
+                            if red_stats.get("skipped"):
+                                status = "skipped"
+                            else:
+                                status = f"{red_stats['inserted']} docs inserted, {red_stats['num_documents']} total docs"
+                            print(
+                                f"  {red_stats['source_model_name']}/"
+                                f"{red_stats['algorithm']}/"
+                                f"{red_stats['target_dims']}: {status}"
+                            )
+
+                    except Exception as e:
+                        logging.error(
+                            "Error processing corpus %s (padding_method=%s, target_chunk_count=%s): %s",
+                            corpus_name,
+                            padding_method,
+                            target_chunk_count,
+                            str(e)
+                        )
+                        raise
 
     print("\n" + "=" * 60)
     print("DOCUMENT EMBEDDING COMPUTATION COMPLETE")
