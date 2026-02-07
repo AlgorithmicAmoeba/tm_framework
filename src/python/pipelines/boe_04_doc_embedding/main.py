@@ -85,7 +85,38 @@ class BOEDocEmbeddingPipeline:
             for row in result
         ]
 
-    def check_doc_embeddings_exist(
+    def count_expected_documents(
+        self,
+        session: Session,
+        corpus_name: str,
+        source_model_name: str,
+        algorithm: str,
+        target_dims: int
+    ) -> int:
+        """
+        Count expected documents for a given reduction based on available reduced embeddings.
+
+        This mirrors the fetch query to avoid counting documents that have no reduced chunks.
+        """
+        query = text("""
+            SELECT COUNT(DISTINCT c.raw_document_hash)
+            FROM pipeline.boe_chunked_document c
+            JOIN pipeline.boe_embedding_reduced r
+                ON c.chunk_hash = r.boe_chunked_document_hash
+            WHERE c.corpus_name = :corpus_name
+            AND r.source_model_name = :source_model_name
+            AND r.algorithm = :algorithm
+            AND r.target_dims = :target_dims
+        """)
+        result = session.execute(query, {
+            "corpus_name": corpus_name,
+            "source_model_name": source_model_name,
+            "algorithm": algorithm,
+            "target_dims": target_dims
+        })
+        return int(result.scalar() or 0)
+
+    def count_existing_documents(
         self,
         session: Session,
         corpus_name: str,
@@ -94,9 +125,9 @@ class BOEDocEmbeddingPipeline:
         target_dims: int,
         padding_method: str,
         target_chunk_count: int
-    ) -> bool:
+    ) -> int:
         """
-        Check if document embeddings already exist for a given combination.
+        Count existing document embeddings for a given combination.
 
         Args:
             session: Database session
@@ -106,10 +137,10 @@ class BOEDocEmbeddingPipeline:
             target_dims: Target dimensions
 
         Returns:
-            True if document embeddings exist, False otherwise
+            Number of document embeddings stored
         """
         query = text("""
-            SELECT 1 FROM pipeline.boe_document_embedding
+            SELECT COUNT(*) FROM pipeline.boe_document_embedding
             WHERE corpus_name = :corpus_name
             AND source_model_name = :source_model_name
             AND algorithm = :algorithm
@@ -126,7 +157,7 @@ class BOEDocEmbeddingPipeline:
             "padding_method": padding_method,
             "target_chunk_count": target_chunk_count
         })
-        return result.fetchone() is not None
+        return int(result.scalar() or 0)
 
     def fetch_chunk_embeddings(
         self,
@@ -308,6 +339,55 @@ class BOEDocEmbeddingPipeline:
 
         return padding_vectors.astype(np.float32)
 
+    def create_padding_vectors_precomputed(
+        self,
+        doc_indices: list[int],
+        doc_embeddings: np.ndarray,
+        all_embeddings: np.ndarray,
+        neighbor_indices: np.ndarray,
+        neighbor_weights: np.ndarray,
+        noise_std: np.ndarray,
+        num_padding: int
+    ) -> np.ndarray:
+        """
+        Create padding vectors using precomputed KNN neighbors and weights.
+
+        Args:
+            doc_indices: Indices of the document's chunks in the full corpus array
+            doc_embeddings: Embeddings of the document's chunks
+            all_embeddings: All chunk embeddings in the corpus
+            neighbor_indices: Precomputed neighbor indices for each corpus embedding
+            neighbor_weights: Precomputed neighbor weights for each corpus embedding
+            noise_std: Per-dimension standard deviation for Gaussian noise
+            num_padding: Number of padding vectors to create
+
+        Returns:
+            Array of padding vectors (num_padding × n_dims)
+        """
+        n_dims = doc_embeddings.shape[1]
+        num_chunks = len(doc_embeddings)
+        padding_vectors = np.zeros((num_padding, n_dims), dtype=np.float32)
+        weighted_mean_cache: dict[int, np.ndarray] = {}
+
+        for i in range(num_padding):
+            source_local_idx = i % num_chunks
+            source_global_idx = doc_indices[source_local_idx]
+
+            weighted_mean = weighted_mean_cache.get(source_global_idx)
+            if weighted_mean is None:
+                neighbors = neighbor_indices[source_global_idx]
+                weights = neighbor_weights[source_global_idx]
+                weighted_mean = np.sum(
+                    weights[:, np.newaxis] * all_embeddings[neighbors],
+                    axis=0
+                )
+                weighted_mean_cache[source_global_idx] = weighted_mean
+
+            noise = np.random.normal(0, noise_std, n_dims)
+            padding_vectors[i] = weighted_mean + noise
+
+        return padding_vectors.astype(np.float32)
+
     def create_noise_only_padding_vectors(
         self,
         doc_embeddings: np.ndarray,
@@ -370,10 +450,32 @@ class BOEDocEmbeddingPipeline:
 
         # Build KNN model only if needed
         knn_model = None
+        neighbor_indices = None
+        neighbor_weights = None
         if self.padding_method == "knn_mean":
-            logging.info(f"Building KNN model with k={self.knn_k}")
-            knn_model = NearestNeighbors(n_neighbors=self.knn_k, metric='cosine')
-            knn_model.fit(all_embeddings)
+            needs_padding = any(
+                group["chunk_count"] < self.target_chunk_count
+                for group in doc_groups.values()
+            )
+            if needs_padding:
+                logging.info(f"Building KNN model with k={self.knn_k}")
+                knn_model = NearestNeighbors(
+                    n_neighbors=self.knn_k,
+                    metric="cosine",
+                    n_jobs=-1
+                )
+                knn_model.fit(all_embeddings)
+                logging.info("Precomputing KNN neighbors for all embeddings")
+                distances, neighbor_indices = knn_model.kneighbors(
+                    all_embeddings,
+                    n_neighbors=self.knn_k
+                )
+                distances = distances.astype(np.float32)
+                neighbor_indices = neighbor_indices.astype(np.int32)
+                epsilon = 1e-8
+                neighbor_weights = 1.0 / (distances ** 2 + epsilon)
+                neighbor_weights = neighbor_weights / neighbor_weights.sum(axis=1, keepdims=True)
+                neighbor_weights = neighbor_weights.astype(np.float32)
 
         doc_embeddings_result: dict[str, dict[str, Any]] = {}
 
@@ -391,13 +493,24 @@ class BOEDocEmbeddingPipeline:
             else:
                 num_padding = self.target_chunk_count - chunk_count
                 if self.padding_method == "knn_mean":
-                    padding_vectors = self.create_padding_vectors(
-                        doc_embeddings=doc_chunk_embeddings,
-                        all_embeddings=all_embeddings,
-                        knn_model=knn_model,
-                        noise_std=noise_std,
-                        num_padding=num_padding
-                    )
+                    if neighbor_indices is None or neighbor_weights is None:
+                        padding_vectors = self.create_padding_vectors(
+                            doc_embeddings=doc_chunk_embeddings,
+                            all_embeddings=all_embeddings,
+                            knn_model=knn_model,
+                            noise_std=noise_std,
+                            num_padding=num_padding
+                        )
+                    else:
+                        padding_vectors = self.create_padding_vectors_precomputed(
+                            doc_indices=indices,
+                            doc_embeddings=doc_chunk_embeddings,
+                            all_embeddings=all_embeddings,
+                            neighbor_indices=neighbor_indices,
+                            neighbor_weights=neighbor_weights,
+                            noise_std=noise_std,
+                            num_padding=num_padding
+                        )
                 else:
                     padding_vectors = self.create_noise_only_padding_vectors(
                         doc_embeddings=doc_chunk_embeddings,
@@ -443,48 +556,31 @@ class BOEDocEmbeddingPipeline:
         Returns:
             Tuple of (inserted_count, existing_count)
         """
-        logging.info(f"Storing {len(doc_embeddings)} document embeddings")
+        total = len(doc_embeddings)
+        logging.info(f"Storing {total} document embeddings")
 
+        insert_query = text("""
+            INSERT INTO pipeline.boe_document_embedding
+            (corpus_name, raw_document_hash, source_model_name, algorithm,
+             target_dims, padding_method, target_chunk_count, vector, chunk_count, padded_to)
+            VALUES (:corpus_name, :raw_document_hash, :source_model_name, :algorithm,
+                    :target_dims, :padding_method, :target_chunk_count, :vector, :chunk_count, :padded_to)
+            ON CONFLICT (corpus_name, raw_document_hash, source_model_name, algorithm, target_dims, padding_method, target_chunk_count)
+            DO NOTHING
+        """)
+
+        batch_size = 5000
+        rows: list[dict[str, Any]] = []
         inserted_count = 0
-        existing_count = 0
+
+        def flush_batch(batch: list[dict[str, Any]]) -> int:
+            if not batch:
+                return 0
+            result = session.execute(insert_query, batch)
+            return int(result.rowcount or 0)
 
         for doc_hash, embed_data in doc_embeddings.items():
-            # Check if document embedding already exists
-            check_query = text("""
-                SELECT id FROM pipeline.boe_document_embedding
-                WHERE corpus_name = :corpus_name
-                AND raw_document_hash = :raw_document_hash
-                AND source_model_name = :source_model_name
-                AND algorithm = :algorithm
-                AND target_dims = :target_dims
-                AND padding_method = :padding_method
-                AND target_chunk_count = :target_chunk_count
-            """)
-
-            existing = session.execute(check_query, {
-                "corpus_name": corpus_name,
-                "raw_document_hash": doc_hash,
-                "source_model_name": source_model_name,
-                "algorithm": algorithm,
-                "target_dims": target_dims,
-                "padding_method": padding_method,
-                "target_chunk_count": target_chunk_count
-            }).fetchone()
-
-            if existing:
-                existing_count += 1
-                continue
-
-            # Insert new document embedding
-            insert_query = text("""
-                INSERT INTO pipeline.boe_document_embedding
-                (corpus_name, raw_document_hash, source_model_name, algorithm,
-                 target_dims, padding_method, target_chunk_count, vector, chunk_count, padded_to)
-                VALUES (:corpus_name, :raw_document_hash, :source_model_name, :algorithm,
-                        :target_dims, :padding_method, :target_chunk_count, :vector, :chunk_count, :padded_to)
-            """)
-
-            session.execute(insert_query, {
+            rows.append({
                 "corpus_name": corpus_name,
                 "raw_document_hash": doc_hash,
                 "source_model_name": source_model_name,
@@ -496,9 +592,18 @@ class BOEDocEmbeddingPipeline:
                 "chunk_count": embed_data["chunk_count"],
                 "padded_to": embed_data["padded_to"]
             })
-            inserted_count += 1
+
+            if len(rows) >= batch_size:
+                inserted_count += flush_batch(rows)
+                logging.info(f"Flushed {len(rows)} rows to the database. Total inserted: {inserted_count}")
+                rows.clear()
+
+        if rows:
+            inserted_count += flush_batch(rows)
+
 
         session.commit()
+        existing_count = total - inserted_count
         logging.info(f"Document embeddings stored: {inserted_count} inserted, {existing_count} existing")
         return inserted_count, existing_count
 
@@ -525,17 +630,45 @@ class BOEDocEmbeddingPipeline:
         """
         logging.info(f"Processing {source_model_name}/{algorithm}/{target_dims}")
 
-        # Check if document embeddings already exist
-        if self.check_doc_embeddings_exist(
-            session,
-            corpus_name,
-            source_model_name,
-            algorithm,
-            target_dims,
-            self.padding_method,
-            self.target_chunk_count
-        ):
-            logging.info(f"Document embeddings already exist for {source_model_name}/{algorithm}/{target_dims}, skipping")
+        expected_docs = self.count_expected_documents(
+            session=session,
+            corpus_name=corpus_name,
+            source_model_name=source_model_name,
+            algorithm=algorithm,
+            target_dims=target_dims
+        )
+
+        if expected_docs == 0:
+            logging.info(f"No reducible documents found for {source_model_name}/{algorithm}/{target_dims}, skipping")
+            return {
+                "source_model_name": source_model_name,
+                "algorithm": algorithm,
+                "target_dims": target_dims,
+                "skipped": True,
+                "num_documents": 0,
+                "inserted": 0,
+                "existing": 0
+            }
+
+        existing_docs = self.count_existing_documents(
+            session=session,
+            corpus_name=corpus_name,
+            source_model_name=source_model_name,
+            algorithm=algorithm,
+            target_dims=target_dims,
+            padding_method=self.padding_method,
+            target_chunk_count=self.target_chunk_count
+        )
+
+        if existing_docs >= expected_docs:
+            logging.info(
+                "Document embeddings already complete for %s/%s/%s (%d/%d), skipping",
+                source_model_name,
+                algorithm,
+                target_dims,
+                existing_docs,
+                expected_docs
+            )
             return {
                 "source_model_name": source_model_name,
                 "algorithm": algorithm,
