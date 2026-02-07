@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS pipeline.boe_word_embedding (
     source_model_name VARCHAR(255) NOT NULL,  -- e.g., 'all-MiniLM-L6-v2', 'naver/splade-v3'
     algorithm VARCHAR(50) NOT NULL,            -- 'umap' or 'pca'
     target_dims INTEGER NOT NULL,              -- 20, 50, or 100
-    padding_method VARCHAR(50) NOT NULL DEFAULT 'knn_mean',
+    padding_method VARCHAR(50) NOT NULL,
     vector FLOAT[] NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(corpus_name, word, source_model_name, algorithm, target_dims, padding_method)
