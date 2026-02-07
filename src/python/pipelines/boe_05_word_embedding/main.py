@@ -1,6 +1,6 @@
 """
 BOE (Bag of Embeddings) Word Embedding pipeline.
-Derives word embeddings from chunk embeddings using TF-IDF matrix factorization
+Derives word embeddings from document embeddings using TF-IDF matrix factorization
 with Ridge regression.
 """
 import logging
@@ -18,11 +18,11 @@ import configuration as cfg
 
 class BOEWordEmbeddingPipeline:
     """
-    Pipeline for deriving word embeddings from chunk embeddings.
+    Pipeline for deriving word embeddings from document embeddings.
 
     Uses TF-IDF matrix factorization with Ridge regression:
-    X: TF-IDF matrix (chunks × vocab_words)
-    C: chunk embeddings (chunks × embedding_dim)
+    X: TF-IDF matrix (documents × vocab_words)
+    C: document embeddings (documents × embedding_dim)
     W = Ridge.fit(X, C).coef_.T (word embeddings)
     """
 
@@ -45,27 +45,28 @@ class BOEWordEmbeddingPipeline:
         corpus_name: str
     ) -> list[dict[str, Any]]:
         """
-        Get available reduced embeddings for a corpus.
+        Get available document embeddings for a corpus.
 
         Args:
             session: Database session
             corpus_name: Name of the corpus
 
         Returns:
-            List of dicts with source_model_name, algorithm, target_dims combinations
+            List of dicts with source_model_name, algorithm, target_dims, padding_method
         """
         query = text("""
-            SELECT DISTINCT source_model_name, algorithm, target_dims
-            FROM pipeline.boe_embedding_reduced
+            SELECT DISTINCT source_model_name, algorithm, target_dims, padding_method
+            FROM pipeline.boe_document_embedding
             WHERE corpus_name = :corpus_name
-            ORDER BY source_model_name, algorithm, target_dims
+            ORDER BY source_model_name, algorithm, target_dims, padding_method
         """)
         result = session.execute(query, {"corpus_name": corpus_name})
         return [
             {
                 "source_model_name": row[0],
                 "algorithm": row[1],
-                "target_dims": row[2]
+                "target_dims": row[2],
+                "padding_method": row[3]
             }
             for row in result
         ]
@@ -76,7 +77,8 @@ class BOEWordEmbeddingPipeline:
         corpus_name: str,
         source_model_name: str,
         algorithm: str,
-        target_dims: int
+        target_dims: int,
+        padding_method: str
     ) -> bool:
         """
         Check if word embeddings already exist for a given combination.
@@ -97,26 +99,29 @@ class BOEWordEmbeddingPipeline:
             AND source_model_name = :source_model_name
             AND algorithm = :algorithm
             AND target_dims = :target_dims
+            AND padding_method = :padding_method
             LIMIT 1
         """)
         result = session.execute(query, {
             "corpus_name": corpus_name,
             "source_model_name": source_model_name,
             "algorithm": algorithm,
-            "target_dims": target_dims
+            "target_dims": target_dims,
+            "padding_method": padding_method
         })
         return result.fetchone() is not None
 
-    def fetch_chunk_data(
+    def fetch_document_data(
         self,
         session: Session,
         corpus_name: str,
         source_model_name: str,
         algorithm: str,
-        target_dims: int
+        target_dims: int,
+        padding_method: str
     ) -> tuple[list[str], list[str], np.ndarray]:
         """
-        Fetch chunk vocabulary words and reduced embeddings.
+        Fetch document vocabulary words and document embeddings.
 
         Args:
             session: Database session
@@ -124,74 +129,94 @@ class BOEWordEmbeddingPipeline:
             source_model_name: Source embedding model name
             algorithm: Reduction algorithm
             target_dims: Target dimensions
+            padding_method: Document embedding padding method
 
         Returns:
-            Tuple of (chunk_hashes, vocabulary_words_list, embeddings_matrix)
-            where vocabulary_words_list contains space-separated vocabulary words per chunk
+            Tuple of (raw_document_hashes, vocabulary_documents, embeddings_matrix)
+            where vocabulary_documents contains space-separated vocabulary words per document
         """
-        logging.info(f"Fetching chunk data for {source_model_name}/{algorithm}/{target_dims}")
+        logging.info(
+            "Fetching document data for %s/%s/%s (%s)",
+            source_model_name,
+            algorithm,
+            target_dims,
+            padding_method
+        )
 
         query = text("""
-            SELECT c.chunk_hash, c.chunk_vocabulary_words, r.vector
-            FROM pipeline.boe_chunked_document c
-            JOIN pipeline.boe_embedding_reduced r
-                ON c.chunk_hash = r.boe_chunked_document_hash
-            WHERE c.corpus_name = :corpus_name
-            AND r.source_model_name = :source_model_name
-            AND r.algorithm = :algorithm
-            AND r.target_dims = :target_dims
-            ORDER BY c.chunk_hash
+            SELECT d.raw_document_hash, d.content, e.vector
+            FROM pipeline.vocabulary_document d
+            JOIN pipeline.boe_document_embedding e
+                ON d.raw_document_hash = e.raw_document_hash
+                AND d.corpus_name = e.corpus_name
+            WHERE d.corpus_name = :corpus_name
+            AND e.source_model_name = :source_model_name
+            AND e.algorithm = :algorithm
+            AND e.target_dims = :target_dims
+            AND e.padding_method = :padding_method
+            ORDER BY d.raw_document_hash
         """)
 
         result = session.execute(query, {
             "corpus_name": corpus_name,
             "source_model_name": source_model_name,
             "algorithm": algorithm,
-            "target_dims": target_dims
+            "target_dims": target_dims,
+            "padding_method": padding_method
         })
 
-        chunk_hashes = []
-        vocab_words_list = []
+        raw_document_hashes = []
+        vocabulary_documents = []
         vectors = []
 
         for row in result:
-            chunk_hashes.append(row[0])
-            vocab_words_list.append(row[1])
+            raw_document_hashes.append(row[0])
+            vocabulary_documents.append(row[1])
             vectors.append(row[2])
 
         if not vectors:
-            logging.warning(f"No chunk data found for {source_model_name}/{algorithm}/{target_dims}")
+            logging.warning(
+                "No document data found for %s/%s/%s (%s)",
+                source_model_name,
+                algorithm,
+                target_dims,
+                padding_method
+            )
             return [], [], np.array([])
 
         embeddings_matrix = np.array(vectors, dtype=np.float32)
-        logging.info(f"Fetched {len(chunk_hashes)} chunks with embeddings shape {embeddings_matrix.shape}")
+        logging.info(
+            "Fetched %d documents with embeddings shape %s",
+            len(raw_document_hashes),
+            embeddings_matrix.shape
+        )
 
-        return chunk_hashes, vocab_words_list, embeddings_matrix
+        return raw_document_hashes, vocabulary_documents, embeddings_matrix
 
     def derive_word_embeddings(
         self,
-        vocab_words_list: list[str],
-        chunk_embeddings: np.ndarray
+        vocabulary_documents: list[str],
+        document_embeddings: np.ndarray
     ) -> tuple[list[str], np.ndarray]:
         """
-        Derive word embeddings from chunk embeddings using TF-IDF + Ridge regression.
+        Derive word embeddings from document embeddings using TF-IDF + Ridge regression.
 
         Args:
-            vocab_words_list: List of space-separated vocabulary words per chunk
-            chunk_embeddings: Matrix of chunk embeddings (n_chunks × n_dims)
+            vocabulary_documents: List of space-separated vocabulary words per document
+            document_embeddings: Matrix of document embeddings (n_docs × n_dims)
 
         Returns:
             Tuple of (vocabulary_words, word_embeddings) where word_embeddings
             is (n_words × n_dims)
         """
-        logging.info("Building TF-IDF matrix from chunk vocabulary words")
+        logging.info("Building TF-IDF matrix from document vocabulary words")
 
-        # Build TF-IDF matrix from chunk vocabulary words
+        # Build TF-IDF matrix from document vocabulary words
         vectorizer = TfidfVectorizer(
             lowercase=True,
             token_pattern=r'(?u)\b\w+\b'
         )
-        tfidf_matrix = vectorizer.fit_transform(vocab_words_list)
+        tfidf_matrix = vectorizer.fit_transform(vocabulary_documents)
         vocabulary_words = vectorizer.get_feature_names_out().tolist()
 
         logging.info(f"TF-IDF matrix shape: {tfidf_matrix.shape}")
@@ -202,13 +227,13 @@ class BOEWordEmbeddingPipeline:
             return [], np.array([])
 
         # Solve for word embeddings using Ridge regression
-        # X: TF-IDF matrix (chunks × vocab_words)
-        # C: chunk embeddings (chunks × embedding_dim)
+        # X: TF-IDF matrix (documents × vocab_words)
+        # C: document embeddings (documents × embedding_dim)
         # W = Ridge.fit(X, C).coef_.T (word_embeddings)
         logging.info(f"Fitting Ridge regression (alpha={self.ridge_alpha})")
 
         ridge = Ridge(alpha=self.ridge_alpha, fit_intercept=False)
-        ridge.fit(tfidf_matrix, chunk_embeddings)
+        ridge.fit(tfidf_matrix, document_embeddings)
 
         # coef_ is (n_dims × n_words) after fitting, so transpose to get (n_words × n_dims)
         word_embeddings = ridge.coef_.T.astype(np.float32)
@@ -224,6 +249,7 @@ class BOEWordEmbeddingPipeline:
         source_model_name: str,
         algorithm: str,
         target_dims: int,
+        padding_method: str,
         vocabulary_words: list[str],
         word_embeddings: np.ndarray
     ) -> tuple[int, int]:
@@ -256,6 +282,7 @@ class BOEWordEmbeddingPipeline:
                 AND source_model_name = :source_model_name
                 AND algorithm = :algorithm
                 AND target_dims = :target_dims
+                AND padding_method = :padding_method
             """)
 
             existing = session.execute(check_query, {
@@ -263,7 +290,8 @@ class BOEWordEmbeddingPipeline:
                 "word": word,
                 "source_model_name": source_model_name,
                 "algorithm": algorithm,
-                "target_dims": target_dims
+                "target_dims": target_dims,
+                "padding_method": padding_method
             }).fetchone()
 
             if existing:
@@ -273,8 +301,8 @@ class BOEWordEmbeddingPipeline:
             # Insert new word embedding
             insert_query = text("""
                 INSERT INTO pipeline.boe_word_embedding
-                (corpus_name, word, source_model_name, algorithm, target_dims, vector)
-                VALUES (:corpus_name, :word, :source_model_name, :algorithm, :target_dims, :vector)
+                (corpus_name, word, source_model_name, algorithm, target_dims, padding_method, vector)
+                VALUES (:corpus_name, :word, :source_model_name, :algorithm, :target_dims, :padding_method, :vector)
             """)
 
             session.execute(insert_query, {
@@ -283,6 +311,7 @@ class BOEWordEmbeddingPipeline:
                 "source_model_name": source_model_name,
                 "algorithm": algorithm,
                 "target_dims": target_dims,
+                "padding_method": padding_method,
                 "vector": word_embeddings[i].tolist()
             })
             inserted_count += 1
@@ -297,7 +326,8 @@ class BOEWordEmbeddingPipeline:
         corpus_name: str,
         source_model_name: str,
         algorithm: str,
-        target_dims: int
+        target_dims: int,
+        padding_method: str
     ) -> dict[str, Any]:
         """
         Process a single reduction combination to derive word embeddings.
@@ -312,34 +342,48 @@ class BOEWordEmbeddingPipeline:
         Returns:
             Dictionary with processing statistics
         """
-        logging.info(f"Processing {source_model_name}/{algorithm}/{target_dims}")
+        logging.info(
+            "Processing %s/%s/%s (%s)",
+            source_model_name,
+            algorithm,
+            target_dims,
+            padding_method
+        )
 
         # Check if word embeddings already exist
         if self.check_word_embeddings_exist(
-            session, corpus_name, source_model_name, algorithm, target_dims
+            session, corpus_name, source_model_name, algorithm, target_dims, padding_method
         ):
-            logging.info(f"Word embeddings already exist for {source_model_name}/{algorithm}/{target_dims}, skipping")
+            logging.info(
+                "Word embeddings already exist for %s/%s/%s (%s), skipping",
+                source_model_name,
+                algorithm,
+                target_dims,
+                padding_method
+            )
             return {
                 "source_model_name": source_model_name,
                 "algorithm": algorithm,
                 "target_dims": target_dims,
+                "padding_method": padding_method,
                 "skipped": True,
                 "vocabulary_size": 0,
                 "inserted": 0,
                 "existing": 0
             }
 
-        # Fetch chunk data
-        chunk_hashes, vocab_words_list, chunk_embeddings = self.fetch_chunk_data(
-            session, corpus_name, source_model_name, algorithm, target_dims
+        # Fetch document data
+        doc_hashes, vocabulary_documents, document_embeddings = self.fetch_document_data(
+            session, corpus_name, source_model_name, algorithm, target_dims, padding_method
         )
 
-        if len(chunk_hashes) == 0:
-            logging.warning(f"No chunks found for {source_model_name}/{algorithm}/{target_dims}")
+        if len(doc_hashes) == 0:
+            logging.warning(f"No documents found for {source_model_name}/{algorithm}/{target_dims}")
             return {
                 "source_model_name": source_model_name,
                 "algorithm": algorithm,
                 "target_dims": target_dims,
+                "padding_method": padding_method,
                 "skipped": True,
                 "vocabulary_size": 0,
                 "inserted": 0,
@@ -348,7 +392,7 @@ class BOEWordEmbeddingPipeline:
 
         # Derive word embeddings
         vocabulary_words, word_embeddings = self.derive_word_embeddings(
-            vocab_words_list, chunk_embeddings
+            vocabulary_documents, document_embeddings
         )
 
         if len(vocabulary_words) == 0:
@@ -357,6 +401,7 @@ class BOEWordEmbeddingPipeline:
                 "source_model_name": source_model_name,
                 "algorithm": algorithm,
                 "target_dims": target_dims,
+                "padding_method": padding_method,
                 "skipped": True,
                 "vocabulary_size": 0,
                 "inserted": 0,
@@ -366,13 +411,14 @@ class BOEWordEmbeddingPipeline:
         # Store word embeddings
         inserted, existing = self.store_word_embeddings(
             session, corpus_name, source_model_name, algorithm, target_dims,
-            vocabulary_words, word_embeddings
+            padding_method, vocabulary_words, word_embeddings
         )
 
         return {
             "source_model_name": source_model_name,
             "algorithm": algorithm,
             "target_dims": target_dims,
+            "padding_method": padding_method,
             "skipped": False,
             "vocabulary_size": len(vocabulary_words),
             "inserted": inserted,
@@ -419,7 +465,8 @@ class BOEWordEmbeddingPipeline:
                 corpus_name=corpus_name,
                 source_model_name=reduction["source_model_name"],
                 algorithm=reduction["algorithm"],
-                target_dims=reduction["target_dims"]
+                target_dims=reduction["target_dims"],
+                padding_method=reduction["padding_method"]
             )
             reductions_processed.append(stats)
 
@@ -431,13 +478,13 @@ class BOEWordEmbeddingPipeline:
 
 def get_available_corpora(session: Session) -> list[str]:
     """
-    Get list of available corpora from the chunking pipeline.
+    Get list of available corpora from the document embedding pipeline.
 
     Returns:
         List of corpus names
     """
     query = text("""
-        SELECT DISTINCT corpus_name FROM pipeline.boe_chunked_document
+        SELECT DISTINCT corpus_name FROM pipeline.boe_document_embedding
     """)
     result = session.execute(query)
     return [row[0] for row in result]
@@ -462,7 +509,7 @@ def main():
     with get_session(db_config) as session:
         print("BOE Word Embedding Pipeline")
         print("=" * 60)
-        print("Method: TF-IDF + Ridge Regression")
+        print("Method: TF-IDF (document-level) + Ridge Regression")
         print(f"Available corpora: {get_available_corpora(session)}")
         print("=" * 60)
 
@@ -485,7 +532,10 @@ def main():
                         status = "skipped"
                     else:
                         status = f"{red_stats['inserted']} words inserted, vocab size: {red_stats['vocabulary_size']}"
-                    print(f"  {red_stats['source_model_name']}/{red_stats['algorithm']}/{red_stats['target_dims']}: {status}")
+                    print(
+                        f"  {red_stats['source_model_name']}/{red_stats['algorithm']}/"
+                        f"{red_stats['target_dims']}/{red_stats['padding_method']}: {status}"
+                    )
 
             except Exception as e:
                 logging.error(f"Error processing corpus {corpus_name}: {str(e)}")
