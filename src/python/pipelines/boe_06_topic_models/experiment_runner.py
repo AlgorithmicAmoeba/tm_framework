@@ -24,10 +24,10 @@ NUM_TOPICS_LIST = [10, 20, 50, 100, 200]
 
 FILTERS = {
     "include": {
-        "source_model_name": [],
-        "algorithm": [],
-        "target_dims": [],
-        "padding_method": [],
+        "source_model_name": ["all-MiniLM-L6-v2"],
+        "algorithm": ["umap"],
+        "target_dims": [100],
+        "padding_method": ["knn_mean", "noise_only"],
         "target_chunk_count": [],
     },
     "exclude": {
@@ -43,8 +43,8 @@ BOE_TOPIC_MODELS = [
     "BERTopic",
     "ZeroShotTM",
     "CombinedTM",
-    "KeyNMF",
-    "SemanticSignalSeparation",
+    # "KeyNMF",
+    # "SemanticSignalSeparation",
     "GMM",
 ]
 

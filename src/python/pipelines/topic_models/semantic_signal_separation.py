@@ -1,13 +1,17 @@
 import numpy as np
 from turftopic import SemanticSignalSeparation
 from sklearn.feature_extraction.text import CountVectorizer
-from typing import List, Dict, Optional
+from typing import List, Dict
 from sqlalchemy import text
 import json
 
 from configuration import load_config_from_env
 from database import get_session
-from data_handling import get_chunk_embeddings, get_vocabulary_documents, get_vocabulary
+from pipelines.topic_models.data_handling import (
+    get_chunk_embeddings,
+    get_vocabulary_documents,
+    get_vocabulary,
+)
 from pipelines.sbert_embedding.main import EMBEDDING_MODEL
 
 class SemanticSignalSeparationWrapper:

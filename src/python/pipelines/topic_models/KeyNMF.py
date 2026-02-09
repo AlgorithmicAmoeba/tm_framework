@@ -7,7 +7,11 @@ import json
 
 from configuration import load_config_from_env
 from database import get_session
-from data_handling import get_chunk_embeddings, get_vocabulary_documents, get_vocabulary
+from pipelines.topic_models.data_handling import (
+    get_chunk_embeddings,
+    get_vocabulary_documents,
+    get_vocabulary,
+)
 from pipelines.sbert_embedding.main import EMBEDDING_MODEL
 
 class KeyNMFWrapper:
@@ -24,7 +28,7 @@ class KeyNMFWrapper:
         self.model = None
         self.vectorizer = None
 
-    def train(self, documents: List[str], embeddings: np.ndarray, vocabulary: Dict[int, str]):
+    def train(self, documents: List[str], embeddings: np.ndarray, vocabulary: Dict[int, str], keywords: List[Dict[str, float]] = None):
         """
         Train KeyNMF model on document embeddings
         
@@ -45,7 +49,7 @@ class KeyNMFWrapper:
         )
         
         # Fit the model to our documents and embeddings
-        self.model.fit(documents, embeddings=embeddings)
+        self.model.fit(documents, embeddings=embeddings, keywords=keywords)
 
     def get_topics(self, n_words: int = 10) -> List[List[str]]:
         """

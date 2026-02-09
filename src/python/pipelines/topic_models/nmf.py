@@ -7,7 +7,7 @@ from sklearn.decomposition import NMF
 
 from configuration import load_config_from_env
 from database import get_session
-from data_handling import get_tfidf_vectors, get_vocabulary
+from pipelines.topic_models.data_handling import get_tfidf_vectors, get_vocabulary
 
 class NMFModel:
     def __init__(self, num_topics: int, max_iter: int = 200, random_state: int = 42):

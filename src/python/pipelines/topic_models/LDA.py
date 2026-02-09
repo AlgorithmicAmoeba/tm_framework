@@ -6,7 +6,7 @@ import json
 
 from configuration import load_config_from_env
 from database import get_session
-from data_handling import get_tfidf_vectors, get_vocabulary
+from pipelines.topic_models.data_handling import get_tfidf_vectors, get_vocabulary
 
 class LDA:
     def __init__(self, num_topics: int):
