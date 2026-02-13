@@ -1,6 +1,5 @@
 CREATE SCHEMA IF NOT EXISTS pipeline;
 
--- Table to store performance metrics for BOE topic models
 CREATE TABLE IF NOT EXISTS pipeline.boe_topic_model_performance (
     id SERIAL PRIMARY KEY,
     boe_topic_model_corpus_result_id INTEGER REFERENCES pipeline.boe_topic_model_corpus_result(id),
@@ -9,3 +8,8 @@ CREATE TABLE IF NOT EXISTS pipeline.boe_topic_model_performance (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(boe_topic_model_corpus_result_id, metric_name)
 );
+
+CREATE TRIGGER set_current_timestamp_updated_at
+BEFORE UPDATE ON pipeline.boe_topic_model_performance
+FOR EACH ROW
+EXECUTE FUNCTION set_current_timestamp_updated_at();

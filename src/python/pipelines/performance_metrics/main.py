@@ -2,7 +2,6 @@ import logging
 import traceback
 from typing import List, Dict, Any
 import json
-from collections import defaultdict
 from configuration import load_config_from_env
 from database import get_session
 from sqlalchemy import text
