@@ -1,3 +1,5 @@
+import gc
+
 import numpy as np
 from turftopic import BERTopic
 from sklearn.feature_extraction.text import CountVectorizer
@@ -9,6 +11,12 @@ from configuration import load_config_from_env
 from database import get_session
 from pipelines.topic_models.data_handling import get_chunk_embeddings, get_vocabulary_documents, get_vocabulary
 
+class _DummyEncoder:
+    """Lightweight stand-in for SentenceTransformer when using precomputed embeddings."""
+    def encode(self, documents):
+        raise RuntimeError("DummyEncoder.encode() called — pass precomputed embeddings instead")
+
+
 class BERTopicModel:
     def __init__(self, num_topics: int):
         self.num_topics = num_topics
@@ -18,7 +26,7 @@ class BERTopicModel:
     def train(self, documents: List[str], embeddings: np.ndarray, vocabulary: Dict[int, str]):
         """
         Train BERTopic model on document embeddings
-        
+
         Args:
             documents: List of preprocessed documents
             embeddings: 2D numpy array of document embeddings
@@ -26,13 +34,15 @@ class BERTopicModel:
         """
         # Create custom vectorizer with vocabulary restriction
         self.vectorizer = CountVectorizer(vocabulary=list(vocabulary.values()))
-        
+
         # Initialize BERTopic with our vectorizer and desired number of topics
+        # Pass a dummy encoder to avoid loading SentenceTransformer (we use precomputed embeddings)
         self.model = BERTopic(
             n_reduce_to=self.num_topics,
             vectorizer=self.vectorizer,
+            encoder=_DummyEncoder(),
         )
-        
+
         # Fit the model to our documents and embeddings
         self.model.fit(documents, embeddings=embeddings)
 
@@ -122,7 +132,16 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
         bertopic = BERTopicModel(num_topics=num_topics)
         bertopic.train(documents, embeddings, vocabulary)
         topics = bertopic.get_topics()
-        
+
+        # Free model memory (breaks circular refs between model and hierarchy)
+        del bertopic.model.embeddings
+        del bertopic.model.doc_term_matrix
+        del bertopic.model.reduced_embeddings
+        del bertopic.model.hierarchy
+        del bertopic.model
+        del bertopic
+        gc.collect()
+
         # Store results in database
         with get_session(db_config) as session:
             query = text("""

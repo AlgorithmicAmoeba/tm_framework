@@ -1,3 +1,18 @@
+"""
+Running from the command line:
+
+set -a && . .env && set +a
+while true; do
+uv run src/python/pipelines/boe_06_topic_models/experiment_runner.py
+rc=$?
+if [ $rc -eq 0 ]; then
+    break
+fi
+echo "Exit code: $rc - retrying..."
+sleep 1
+done
+"""
+
 import json
 import logging
 from typing import Any
@@ -26,8 +41,8 @@ FILTERS = {
     "include": {
         "source_model_name": ["all-MiniLM-L6-v2"],
         "algorithm": ["umap"],
-        "target_dims": [100],
-        "padding_method": ["knn_mean", "noise_only"],
+        "target_dims": [50, 100],
+        "padding_method": ["noise_only"],
         "target_chunk_count": [],
     },
     "exclude": {
@@ -317,8 +332,8 @@ def run_experiments(target_results: int = TARGET_RESULTS) -> None:
                 pbar.update(len(BOE_TOPIC_MODELS) * len(NUM_TOPICS_LIST))
                 continue
 
-            for num_topics in NUM_TOPICS_LIST:
-                for model_name in BOE_TOPIC_MODELS:
+            for model_name in BOE_TOPIC_MODELS:
+                for num_topics in NUM_TOPICS_LIST:
                     with get_session(config.database) as session:
                         model_id = get_boe_topic_model_id(session, model_name)
                         existing = count_existing_results(
@@ -338,6 +353,11 @@ def run_experiments(target_results: int = TARGET_RESULTS) -> None:
                         f"{model_name} on {corpus_name} ({combo['algorithm']}/{combo['target_dims']}), "
                         f"topics={num_topics}, iters={iterations_to_run}"
                     )
+
+                    if model_name == "GMM" and num_topics > embeddings.shape[1]:
+                        logging.info("GMM: num_topics > embeddings.shape[0], skipping")
+                        pbar.update(1)
+                        continue
 
                     for _ in range(iterations_to_run):
                         try:
