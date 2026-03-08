@@ -13,12 +13,13 @@ from pipelines.topic_models.data_handling import (
     get_vocabulary,
 )
 from pipelines.sbert_embedding.main import EMBEDDING_MODEL
+from pipelines.topic_models.boe_word_encoder import BOEWordEncoder
 
 class SemanticSignalSeparationWrapper:
     def __init__(self, num_topics: int, feature_importance: str = "combined"):
         """
         Initialize Semantic Signal Separation wrapper
-        
+
         Args:
             num_topics: Number of topics to extract
             feature_importance: Method for calculating term importance
@@ -29,25 +30,32 @@ class SemanticSignalSeparationWrapper:
         self.model = None
         self.vectorizer = None
 
-    def train(self, documents: List[str], embeddings: np.ndarray, vocabulary: Dict[int, str]):
+    def train(self, documents: List[str], embeddings: np.ndarray, vocabulary: Dict[int, str], word_embeddings: dict[str, np.ndarray] = None):
         """
         Train S³ model on document embeddings
-        
+
         Args:
             documents: List of preprocessed documents
             embeddings: 2D numpy array of document embeddings
             vocabulary: Dictionary mapping word indices to words
+            word_embeddings: Optional dict of word -> embedding vector for BOE pipeline
         """
-        # Create custom vectorizer with vocabulary restriction
-        self.vectorizer = CountVectorizer(vocabulary=list(vocabulary.values()))
-        
+        if word_embeddings is not None:
+            encoder = BOEWordEncoder(word_embeddings, embedding_dim=embeddings.shape[1])
+            vocab_words = [w for w in vocabulary.values() if w in word_embeddings]
+            self.vectorizer = CountVectorizer(vocabulary=vocab_words)
+        else:
+            encoder = EMBEDDING_MODEL
+            self.vectorizer = CountVectorizer(vocabulary=list(vocabulary.values()))
+
         # Initialize S³ model
         self.model = SemanticSignalSeparation(
-            encoder=EMBEDDING_MODEL,
+            encoder=encoder,
             n_components=self.num_topics,
-            feature_importance=self.feature_importance
+            vectorizer=self.vectorizer,
+            feature_importance=self.feature_importance,
         )
-        
+
         # Fit the model to our documents and embeddings
         self.model.fit(documents, embeddings=embeddings)
 

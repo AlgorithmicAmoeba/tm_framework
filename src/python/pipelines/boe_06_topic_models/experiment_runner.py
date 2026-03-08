@@ -43,10 +43,12 @@ BOE_TOPIC_MODELS = [
     "BERTopic",
     "ZeroShotTM",
     "CombinedTM",
-    # "KeyNMF",
-    # "SemanticSignalSeparation",
+    "KeyNMF",
+    "SemanticSignalSeparation",
     "GMM",
 ]
+
+MODELS_NEEDING_WORD_EMBEDDINGS = {"KeyNMF", "SemanticSignalSeparation"}
 
 
 def get_available_corpora(session: Session) -> list[str]:
@@ -182,6 +184,30 @@ def fetch_document_embeddings(
     return embedding_map, sorted(padded_to_values)
 
 
+def fetch_boe_word_embeddings(
+    session: Session,
+    corpus_name: str,
+    combo: dict[str, Any],
+) -> dict[str, np.ndarray]:
+    query = text("""
+        SELECT word, vector
+        FROM pipeline.boe_word_embedding
+        WHERE corpus_name = :corpus_name
+        AND source_model_name = :source_model_name
+        AND algorithm = :algorithm
+        AND target_dims = :target_dims
+        AND padding_method = :padding_method
+    """)
+    result = session.execute(query, {
+        "corpus_name": corpus_name,
+        "source_model_name": combo["source_model_name"],
+        "algorithm": combo["algorithm"],
+        "target_dims": combo["target_dims"],
+        "padding_method": combo["padding_method"],
+    })
+    return {row[0]: np.array(row[1], dtype=np.float32) for row in result}
+
+
 def align_documents_and_embeddings(
     corpus_name: str,
     embedding_map: dict[str, np.ndarray],
@@ -283,6 +309,7 @@ def run_experiments(target_results: int = TARGET_RESULTS) -> None:
         for combo in combos:
             with get_session(config.database) as session:
                 embedding_map, padded_to_values = fetch_document_embeddings(session, corpus_name, combo)
+                word_embeddings = fetch_boe_word_embeddings(session, corpus_name, combo)
 
             documents, embeddings = align_documents_and_embeddings(corpus_name, embedding_map)
             if len(documents) == 0:
@@ -315,7 +342,10 @@ def run_experiments(target_results: int = TARGET_RESULTS) -> None:
                     for _ in range(iterations_to_run):
                         try:
                             model, model_hparams = build_model(model_name, num_topics)
-                            model.train(documents, embeddings, vocabulary)
+                            if model_name in MODELS_NEEDING_WORD_EMBEDDINGS:
+                                model.train(documents, embeddings, vocabulary, word_embeddings=word_embeddings)
+                            else:
+                                model.train(documents, embeddings, vocabulary)
                             topics = model.get_topics()
 
                             hyperparameters = {

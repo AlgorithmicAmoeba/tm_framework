@@ -13,12 +13,13 @@ from pipelines.topic_models.data_handling import (
     get_vocabulary,
 )
 from pipelines.sbert_embedding.main import EMBEDDING_MODEL
+from pipelines.topic_models.boe_word_encoder import BOEWordEncoder
 
 class KeyNMFWrapper:
     def __init__(self, num_topics: int, seed_phrase: Optional[str] = None):
         """
         Initialize KeyNMF wrapper
-        
+
         Args:
             num_topics: Number of topics to extract
             seed_phrase: Optional seed phrase for seeded topic modeling
@@ -28,26 +29,34 @@ class KeyNMFWrapper:
         self.model = None
         self.vectorizer = None
 
-    def train(self, documents: List[str], embeddings: np.ndarray, vocabulary: Dict[int, str], keywords: List[Dict[str, float]] = None):
+    def train(self, documents: List[str], embeddings: np.ndarray, vocabulary: Dict[int, str], keywords: List[Dict[str, float]] = None, word_embeddings: dict[str, np.ndarray] = None):
         """
         Train KeyNMF model on document embeddings
-        
+
         Args:
             documents: List of preprocessed documents
             embeddings: 2D numpy array of document embeddings
             vocabulary: Dictionary mapping word indices to words
+            keywords: Optional pre-computed keywords
+            word_embeddings: Optional dict of word -> embedding vector for BOE pipeline
         """
-        # Create custom vectorizer with vocabulary restriction
-        self.vectorizer = CountVectorizer(vocabulary=list(vocabulary.values()))
-        
+        if word_embeddings is not None:
+            encoder = BOEWordEncoder(word_embeddings, embedding_dim=embeddings.shape[1])
+            vocab_words = [w for w in vocabulary.values() if w in word_embeddings]
+            self.vectorizer = CountVectorizer(vocabulary=vocab_words)
+        else:
+            encoder = EMBEDDING_MODEL
+            self.vectorizer = CountVectorizer(vocabulary=list(vocabulary.values()))
+
         # Initialize KeyNMF
         self.model = KeyNMF(
-            encoder=EMBEDDING_MODEL,
+            encoder=encoder,
             n_components=self.num_topics,
+            vectorizer=self.vectorizer,
             seed_phrase=self.seed_phrase,
-            top_n=10
+            top_n=10,
         )
-        
+
         # Fit the model to our documents and embeddings
         self.model.fit(documents, embeddings=embeddings, keywords=keywords)
 
