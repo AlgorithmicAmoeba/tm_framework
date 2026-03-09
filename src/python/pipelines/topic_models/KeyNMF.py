@@ -11,6 +11,7 @@ from pipelines.topic_models.data_handling import (
     get_chunk_embeddings,
     get_vocabulary_documents,
     get_vocabulary,
+    cleanup_model,
 )
 from pipelines.sbert_embedding.main import EMBEDDING_MODEL
 from pipelines.topic_models.boe_word_encoder import BOEWordEncoder
@@ -138,7 +139,9 @@ def run_keynmf_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: 
         keynmf = KeyNMFWrapper(num_topics=num_topics)
         keynmf.train(documents, embeddings, vocabulary)
         topics = keynmf.get_topics()
-        
+
+        cleanup_model(keynmf)
+
         # Store results in database
         with get_session(db_config) as session:
             query = text("""

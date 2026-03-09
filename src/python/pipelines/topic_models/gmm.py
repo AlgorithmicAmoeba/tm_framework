@@ -12,8 +12,9 @@ from pipelines.topic_models.data_handling import (
     get_chunk_embeddings,
     get_vocabulary_documents,
     get_vocabulary,
+    DummyEncoder,
+    cleanup_model,
 )
-from pipelines.sbert_embedding.main import EMBEDDING_MODEL
 
 class GMMWrapper:
     def __init__(
@@ -56,9 +57,9 @@ class GMMWrapper:
         # Initialize GMM with optional dimensionality reduction
         dimensionality_reduction = PCA(self.num_topics) if self.use_dimensionality_reduction else None
         
-        # Initialize GMM model
+        # Initialize GMM model with dummy encoder to avoid loading SentenceTransformer
         self.model = GMM(
-            encoder=EMBEDDING_MODEL,
+            encoder=DummyEncoder(),
             n_components=self.num_topics,
             weight_prior=self.weight_prior,
             gamma=self.gamma,
@@ -161,11 +162,18 @@ def run_gmm_pipeline(
         )
         gmm_model.train(documents, embeddings, vocabulary)
         topics = gmm_model.get_topics()
-        
+        hparams = {
+            "weight_prior": gmm_model.weight_prior,
+            "gamma": gmm_model.gamma,
+            "use_dimensionality_reduction": gmm_model.use_dimensionality_reduction,
+        }
+
+        cleanup_model(gmm_model)
+
         # Store results in database
         with get_session(db_config) as session:
             query = text("""
-                INSERT INTO pipeline.topic_model_corpus_result 
+                INSERT INTO pipeline.topic_model_corpus_result
                 (topic_model_id, corpus_id, topics, num_topics, hyperparameters)
                 VALUES (:model_id, :corpus_id, :topics, :num_topics, :hyperparameters)
             """).bindparams(
@@ -173,11 +181,7 @@ def run_gmm_pipeline(
                 corpus_id=corpus_id,
                 topics=json.dumps(topics),
                 num_topics=num_topics,
-                hyperparameters=json.dumps({
-                    "weight_prior": gmm_model.weight_prior,
-                    "gamma": gmm_model.gamma,
-                    "use_dimensionality_reduction": gmm_model.use_dimensionality_reduction
-                })
+                hyperparameters=json.dumps(hparams)
             )
             session.execute(query)
             session.commit()

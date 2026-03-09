@@ -1,8 +1,77 @@
+import gc
+import logging
 from typing import Dict, List, Tuple
+
 import numpy as np
 from sqlalchemy import text
 from configuration import load_config_from_env
 from database import get_session
+
+logger = logging.getLogger(__name__)
+
+
+class DummyEncoder:
+    """Lightweight stand-in for SentenceTransformer when using precomputed embeddings.
+
+    Pass this as ``encoder=`` to any turftopic model to avoid loading a real
+    SentenceTransformer (which would allocate ~90-250 MB on the GPU for nothing
+    when embeddings are already precomputed).
+    """
+
+    def encode(self, documents):
+        raise RuntimeError(
+            "DummyEncoder.encode() called — pass precomputed embeddings instead"
+        )
+
+    def get_text_embeddings(self, documents):
+        raise RuntimeError(
+            "DummyEncoder.get_text_embeddings() called — pass precomputed embeddings instead"
+        )
+
+    def get_image_embeddings(self, images):
+        raise RuntimeError(
+            "DummyEncoder.get_image_embeddings() called — pass precomputed embeddings instead"
+        )
+
+
+def cleanup_model(model_wrapper) -> None:
+    """Free memory held by a turftopic model wrapper after topic extraction.
+
+    Handles:
+    - Large numpy arrays stored on the turftopic model (embeddings, doc_term_matrix, etc.)
+    - Circular references (model <-> hierarchy in ClusteringTopicModel)
+    - Pyro param store (AutoEncodingTopicModel / CTM)
+    - PyTorch GPU tensor cache
+    """
+    inner = getattr(model_wrapper, "model", None)
+    if inner is not None:
+        # BERTopic / ClusteringTopicModel stores these large arrays
+        for attr in ("embeddings", "doc_term_matrix", "reduced_embeddings", "hierarchy"):
+            try:
+                delattr(inner, attr)
+            except AttributeError:
+                pass
+        # Drop the inner turftopic model itself
+        del model_wrapper.model
+        model_wrapper.model = None
+
+    # Clear Pyro's global param store (used by AutoEncodingTopicModel / CTM)
+    try:
+        import pyro
+        pyro.clear_param_store()
+    except ImportError:
+        pass
+
+    # Release unreferenced Python objects
+    gc.collect()
+
+    # Free cached GPU memory
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 
 def get_tfidf_vectors(corpus_name: str) -> Tuple[List[str], np.ndarray]:

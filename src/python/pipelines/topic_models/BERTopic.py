@@ -1,5 +1,3 @@
-import gc
-
 import numpy as np
 from turftopic import BERTopic
 from sklearn.feature_extraction.text import CountVectorizer
@@ -9,12 +7,7 @@ import json
 
 from configuration import load_config_from_env
 from database import get_session
-from pipelines.topic_models.data_handling import get_chunk_embeddings, get_vocabulary_documents, get_vocabulary
-
-class _DummyEncoder:
-    """Lightweight stand-in for SentenceTransformer when using precomputed embeddings."""
-    def encode(self, documents):
-        raise RuntimeError("DummyEncoder.encode() called — pass precomputed embeddings instead")
+from pipelines.topic_models.data_handling import get_chunk_embeddings, get_vocabulary_documents, get_vocabulary, DummyEncoder, cleanup_model
 
 
 class BERTopicModel:
@@ -40,7 +33,7 @@ class BERTopicModel:
         self.model = BERTopic(
             n_reduce_to=self.num_topics,
             vectorizer=self.vectorizer,
-            encoder=_DummyEncoder(),
+            encoder=DummyEncoder(),
         )
 
         # Fit the model to our documents and embeddings
@@ -133,14 +126,7 @@ def run_bertopic_pipeline(corpus_name: str, num_topics: int = 20, num_iterations
         bertopic.train(documents, embeddings, vocabulary)
         topics = bertopic.get_topics()
 
-        # Free model memory (breaks circular refs between model and hierarchy)
-        del bertopic.model.embeddings
-        del bertopic.model.doc_term_matrix
-        del bertopic.model.reduced_embeddings
-        del bertopic.model.hierarchy
-        del bertopic.model
-        del bertopic
-        gc.collect()
+        cleanup_model(bertopic)
 
         # Store results in database
         with get_session(db_config) as session:

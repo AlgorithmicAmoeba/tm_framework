@@ -11,6 +11,8 @@ from pipelines.topic_models.data_handling import (
     get_chunk_embeddings,
     get_vocabulary_documents,
     get_vocabulary,
+    DummyEncoder,
+    cleanup_model,
 )
 
 class AutoEncodingTopicModelWrapper:
@@ -43,12 +45,13 @@ class AutoEncodingTopicModelWrapper:
         # Create custom vectorizer with vocabulary restriction
         self.vectorizer = CountVectorizer(vocabulary=list(vocabulary.values()))
         
-        # Initialize AutoEncodingTopicModel
+        # Initialize AutoEncodingTopicModel with dummy encoder to avoid loading SentenceTransformer
         self.model = AutoEncodingTopicModel(
             n_components=self.num_topics,
             combined=self.combined,
             vectorizer=self.vectorizer,
             batch_size=self._batch_size,
+            encoder=DummyEncoder(),
         )
         
         # Fit the model to our documents and embeddings
@@ -157,7 +160,7 @@ def run_autoencoding_tm_pipeline(corpus_name: str, num_topics: int = 20, num_ite
             session.execute(query)
             session.commit()
 
-        del tm
+        cleanup_model(tm)
 
 if __name__ == '__main__':
     # Example usage for ZeroShotTM

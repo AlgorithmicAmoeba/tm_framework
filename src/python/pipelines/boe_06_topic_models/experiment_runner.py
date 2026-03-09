@@ -29,12 +29,12 @@ from pipelines.topic_models.ZeroshotTM import AutoEncodingTopicModelWrapper
 from pipelines.topic_models.KeyNMF import KeyNMFWrapper
 from pipelines.topic_models.semantic_signal_separation import SemanticSignalSeparationWrapper
 from pipelines.topic_models.gmm import GMMWrapper
-from pipelines.topic_models.data_handling import get_vocabulary_documents, get_vocabulary
+from pipelines.topic_models.data_handling import get_vocabulary_documents, get_vocabulary, cleanup_model
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-TARGET_RESULTS = 3
+TARGET_RESULTS = 5
 NUM_TOPICS_LIST = [10, 20, 50, 100, 200]
 
 FILTERS = {
@@ -367,6 +367,9 @@ def run_experiments(target_results: int = TARGET_RESULTS) -> None:
                             else:
                                 model.train(documents, embeddings, vocabulary)
                             topics = model.get_topics()
+
+                            # Free model memory before DB write
+                            cleanup_model(model)
 
                             hyperparameters = {
                                 "boe_embedding": {

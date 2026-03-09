@@ -11,6 +11,7 @@ from pipelines.topic_models.data_handling import (
     get_chunk_embeddings,
     get_vocabulary_documents,
     get_vocabulary,
+    cleanup_model,
 )
 from pipelines.sbert_embedding.main import EMBEDDING_MODEL
 from pipelines.topic_models.boe_word_encoder import BOEWordEncoder
@@ -137,11 +138,14 @@ def run_s3_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int 
         s3_model = SemanticSignalSeparationWrapper(num_topics=num_topics)
         s3_model.train(documents, embeddings, vocabulary)
         topics = s3_model.get_topics()
-        
+        feature_importance = s3_model.feature_importance
+
+        cleanup_model(s3_model)
+
         # Store results in database
         with get_session(db_config) as session:
             query = text("""
-                INSERT INTO pipeline.topic_model_corpus_result 
+                INSERT INTO pipeline.topic_model_corpus_result
                 (topic_model_id, corpus_id, topics, num_topics, hyperparameters)
                 VALUES (:model_id, :corpus_id, :topics, :num_topics, :hyperparameters)
             """).bindparams(
@@ -150,7 +154,7 @@ def run_s3_pipeline(corpus_name: str, num_topics: int = 20, num_iterations: int 
                 topics=json.dumps(topics),
                 num_topics=num_topics,
                 hyperparameters=json.dumps({
-                    "feature_importance": s3_model.feature_importance
+                    "feature_importance": feature_importance
                 })
             )
             session.execute(query)
