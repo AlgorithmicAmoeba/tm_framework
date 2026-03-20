@@ -41,7 +41,7 @@ FILTERS = {
     "include": {
         "source_model_name": ["all-MiniLM-L6-v2"],
         "algorithm": ["umap"],
-        "target_dims": [50, 100],
+        "target_dims": [20, 50, 100],
         "padding_method": ["noise_only"],
         "target_chunk_count": [],
     },
