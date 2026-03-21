@@ -40,8 +40,8 @@ NUM_TOPICS_LIST = [10, 20, 50, 100, 200]
 FILTERS = {
     "include": {
         "source_model_name": ["all-MiniLM-L6-v2"],
-        "algorithm": ["umap"],
-        "target_dims": [20, 50, 100],
+        "algorithm": ["none"],
+        "target_dims": [0],
         "padding_method": ["noise_only"],
         "target_chunk_count": [],
     },

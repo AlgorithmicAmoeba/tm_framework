@@ -85,6 +85,32 @@ class BOEDocEmbeddingPipeline:
             for row in result
         ]
 
+    def get_available_unreduced_models(
+        self,
+        session: Session,
+        corpus_name: str
+    ) -> list[str]:
+        """
+        Get available unreduced embedding models for a corpus.
+
+        Args:
+            session: Database session
+            corpus_name: Name of the corpus
+
+        Returns:
+            List of model names with unreduced embeddings
+        """
+        query = text("""
+            SELECT DISTINCT e.model_name
+            FROM pipeline.boe_embedding e
+            JOIN pipeline.boe_chunked_document c
+                ON e.boe_chunked_document_hash = c.chunk_hash
+            WHERE c.corpus_name = :corpus_name
+            ORDER BY e.model_name
+        """)
+        result = session.execute(query, {"corpus_name": corpus_name})
+        return [row[0] for row in result]
+
     def count_expected_documents(
         self,
         session: Session,
@@ -113,6 +139,29 @@ class BOEDocEmbeddingPipeline:
             "source_model_name": source_model_name,
             "algorithm": algorithm,
             "target_dims": target_dims
+        })
+        return int(result.scalar() or 0)
+
+    def count_expected_documents_unreduced(
+        self,
+        session: Session,
+        corpus_name: str,
+        source_model_name: str
+    ) -> int:
+        """
+        Count expected documents for unreduced embeddings.
+        """
+        query = text("""
+            SELECT COUNT(DISTINCT c.raw_document_hash)
+            FROM pipeline.boe_chunked_document c
+            JOIN pipeline.boe_embedding e
+                ON c.chunk_hash = e.boe_chunked_document_hash
+            WHERE c.corpus_name = :corpus_name
+            AND e.model_name = :source_model_name
+        """)
+        result = session.execute(query, {
+            "corpus_name": corpus_name,
+            "source_model_name": source_model_name,
         })
         return int(result.scalar() or 0)
 
@@ -219,6 +268,61 @@ class BOEDocEmbeddingPipeline:
 
         embeddings_matrix = np.array(vectors, dtype=np.float32)
         logging.info(f"Fetched {len(chunk_hashes)} chunks with embeddings shape {embeddings_matrix.shape}")
+
+        return chunk_hashes, raw_document_hashes, chunk_starts, embeddings_matrix
+
+    def fetch_unreduced_chunk_embeddings(
+        self,
+        session: Session,
+        corpus_name: str,
+        source_model_name: str
+    ) -> tuple[list[str], list[str], list[int], np.ndarray]:
+        """
+        Fetch original (unreduced) chunk embeddings for ablation testing.
+
+        Args:
+            session: Database session
+            corpus_name: Name of the corpus
+            source_model_name: Source embedding model name
+
+        Returns:
+            Tuple of (chunk_hashes, raw_document_hashes, chunk_starts, embeddings_matrix)
+            ordered by raw_document_hash and chunk_start for proper chunk ordering
+        """
+        logging.info(f"Fetching unreduced chunk embeddings for {source_model_name}")
+
+        query = text("""
+            SELECT c.chunk_hash, c.raw_document_hash, c.chunk_start, e.vector
+            FROM pipeline.boe_chunked_document c
+            JOIN pipeline.boe_embedding e
+                ON c.chunk_hash = e.boe_chunked_document_hash
+            WHERE c.corpus_name = :corpus_name
+            AND e.model_name = :source_model_name
+            ORDER BY c.raw_document_hash, c.chunk_start
+        """)
+
+        result = session.execute(query, {
+            "corpus_name": corpus_name,
+            "source_model_name": source_model_name,
+        })
+
+        chunk_hashes = []
+        raw_document_hashes = []
+        chunk_starts = []
+        vectors = []
+
+        for row in result:
+            chunk_hashes.append(row[0])
+            raw_document_hashes.append(row[1])
+            chunk_starts.append(row[2])
+            vectors.append(row[3])
+
+        if not vectors:
+            logging.warning(f"No unreduced chunk embeddings found for {source_model_name}")
+            return [], [], [], np.array([])
+
+        embeddings_matrix = np.array(vectors, dtype=np.float32)
+        logging.info(f"Fetched {len(chunk_hashes)} unreduced chunks with embeddings shape {embeddings_matrix.shape}")
 
         return chunk_hashes, raw_document_hashes, chunk_starts, embeddings_matrix
 
@@ -630,13 +734,20 @@ class BOEDocEmbeddingPipeline:
         """
         logging.info(f"Processing {source_model_name}/{algorithm}/{target_dims}")
 
-        expected_docs = self.count_expected_documents(
-            session=session,
-            corpus_name=corpus_name,
-            source_model_name=source_model_name,
-            algorithm=algorithm,
-            target_dims=target_dims
-        )
+        if target_dims == 0:
+            expected_docs = self.count_expected_documents_unreduced(
+                session=session,
+                corpus_name=corpus_name,
+                source_model_name=source_model_name
+            )
+        else:
+            expected_docs = self.count_expected_documents(
+                session=session,
+                corpus_name=corpus_name,
+                source_model_name=source_model_name,
+                algorithm=algorithm,
+                target_dims=target_dims
+            )
 
         if expected_docs == 0:
             logging.info(f"No reducible documents found for {source_model_name}/{algorithm}/{target_dims}, skipping")
@@ -680,9 +791,14 @@ class BOEDocEmbeddingPipeline:
             }
 
         # Fetch chunk embeddings
-        chunk_hashes, raw_doc_hashes, chunk_starts, embeddings = self.fetch_chunk_embeddings(
-            session, corpus_name, source_model_name, algorithm, target_dims
-        )
+        if target_dims == 0:
+            chunk_hashes, raw_doc_hashes, chunk_starts, embeddings = self.fetch_unreduced_chunk_embeddings(
+                session, corpus_name, source_model_name
+            )
+        else:
+            chunk_hashes, raw_doc_hashes, chunk_starts, embeddings = self.fetch_chunk_embeddings(
+                session, corpus_name, source_model_name, algorithm, target_dims
+            )
 
         if len(chunk_hashes) == 0:
             logging.warning(f"No chunks found for {source_model_name}/{algorithm}/{target_dims}")
@@ -772,6 +888,22 @@ class BOEDocEmbeddingPipeline:
             )
             reductions_processed.append(stats)
 
+        # Process unreduced embeddings (ablation: target_dims=0, algorithm='none')
+        unreduced_models = self.get_available_unreduced_models(session, corpus_name)
+        for model_name in unreduced_models:
+            logging.info("=" * 60)
+            logging.info(f"Processing unreduced: {model_name}/none/0")
+            logging.info("=" * 60)
+
+            stats = self.process_reduction(
+                session=session,
+                corpus_name=corpus_name,
+                source_model_name=model_name,
+                algorithm="none",
+                target_dims=0
+            )
+            reductions_processed.append(stats)
+
         return {
             "corpus_name": corpus_name,
             "reductions_processed": reductions_processed
@@ -826,14 +958,14 @@ def main():
         corpus_chunk_counts: dict[str, int | list[int]] = {
             'battery-abstracts': 2,
             'goodreads-bookgenres': 2,
-            'imdb_reviews': 4,
+            'imdb_reviews': 4,  # [2, 4]
             'newsgroups': 2,
             'patent-classification': 1,
             'pubmed-multilabel': 2,
-            't2-ragbench-convfinqa': 6,
+            't2-ragbench-convfinqa': 6,  # [2, 4, 6]
             'trec_questions': 1,
             'twitter-financial-news': 1,
-            'wikipedia_sample': 9
+            'wikipedia_sample': 9  # [3, 6, 9]
         }
 
 
